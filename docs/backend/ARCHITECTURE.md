@@ -79,24 +79,50 @@ questr/
 
 #### Value Objects
 
-Value objects are immutable objects defined entirely by their attributes, with no unique identity; they are domain primitives. They represent descriptive aspects of the domain that need validation or encapsulation of behavior. In FastAPI projects, value objects remain pure Python — no framework dependency required.
+Value objects are small, simple types that represent single values in your domain. They have no identity — two value objects with the same data are considered equal. Their main purpose is to encapsulate validation and behavior related to that specific value.
 
-**Example:** `GameRating` class as a value object.
+Think of them as enhanced primitives: instead of passing around raw strings or integers, you pass objects that know how to validate themselves and can include related behavior.
+
+**Example:** `Email` as a value object for user registration.
 
 ```python
-# common/value_objects/game_rating.py
-class GameRating:
-    def __init__(self, score: int) -> None:
-        if not 1 <= score <= 10:
-            raise ValueError(f"Rating must be between 1 and 10, got {score}")
-        self._score = score
+# common/value_objects/email.py
+class Email:
+    def __init__(self, value: str) -> None:
+        if not value or "@" not in value:
+            raise ValueError(f"Invalid email address: {value}")
+        self._value = value.lower()
 
     @property
-    def score(self) -> int:
-        return self._score
+    def value(self) -> str:
+        return self._value
 
-    def is_recommended(self) -> bool:
-        return self._score >= 7
+    def is_corporate(self) -> bool:
+        return not self._value.endswith("@gmail.com")
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Email):
+            return NotImplemented
+        return self._value == other._value
+
+    def __hash__(self) -> int:
+        return hash(self._value)
+```
+
+**Why use value objects?**
+
+- **Validation in one place**: Instead of validating emails in every service or router, the `Email` class handles it
+- **Self-documenting code**: Functions that take `Email` instead of `str` are clearer
+- **Built-in behavior**: Methods like `is_corporate()` live with the data they operate on
+
+```python
+# Using the value object
+def register_user(email: Email, name: str) -> User:
+    # Email is already validated - no need for extra checks
+    if email.is_corporate():
+        # Give corporate users premium access
+        pass
+    ...
 ```
 
 #### Domain
