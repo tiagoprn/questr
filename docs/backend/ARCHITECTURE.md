@@ -51,14 +51,6 @@ questr/
 │   ├── schemas.py
 │   ├── dependencies.py
 │   └── router.py
-├── workers/                   # Background processing
-│   ├── __init__.py
-│   ├── celery.py              # Celery configuration
-│   ├── tasks/                 # Background tasks by domain
-│   │   ├── __init__.py
-│   │   ├── game_tasks.py      # Game-related background tasks
-│   │   └── user_tasks.py      # User-related background tasks
-│   └── schedules.py           # Scheduled tasks configuration
 ├── orm/                       # Database configuration
 │   ├── __init__.py
 │   ├── base.py                # SQLAlchemy declarative base + async engine/session
@@ -87,7 +79,7 @@ questr/
 
 #### Value Objects
 
-Value objects are immutable objects defined entirely by their attributes, with no unique identity. They represent descriptive aspects of your domain that need validation or encapsulation of behavior. In FastAPI projects, value objects remain pure Python — no framework dependency required.
+Value objects are immutable objects defined entirely by their attributes, with no unique identity; they are domain primitives. They represent descriptive aspects of the domain that need validation or encapsulation of behavior. In FastAPI projects, value objects remain pure Python — no framework dependency required.
 
 **Example:** `GameRating` class as a value object.
 
@@ -109,7 +101,7 @@ class GameRating:
 
 #### Domain
 
-Domain objects encapsulate core business logic, rules, and behaviors central to the application. They represent the "what" of your system. Domain objects are pure Python — they have zero knowledge of FastAPI, SQLAlchemy, or Pydantic.
+Domain objects encapsulate core business logic, rules, and behaviors central to the application. They represent the "what" of the system. Domain objects are pure Python — they have zero knowledge of FastAPI, SQLAlchemy, or Pydantic.
 
 **Example:** `Game` domain object containing game state management and business rules.
 
@@ -252,51 +244,95 @@ async def get_game_service(
     return GameService(game_repo, user_repo)
 ```
 
-#### Background Workers (Celery)
+#### Background Tasks
 
-Background workers handle time-consuming or scheduled tasks that should run asynchronously outside the main request flow. Celery tasks remain synchronous by default; for async task bodies, use `asyncio.run()` or a dedicated async task library.
+Background tasks handle time-consuming operations that should run outside the main request flow. FastAPI provides a built-in `BackgroundTasks` mechanism that is suitable for most use cases without requiring additional infrastructure.
 
-**Example:** Game metadata fetching task.
+**Example:** Triggering a background task from a service.
 
 ```python
-# workers/tasks/game_tasks.py
-from workers.celery import celery_app
+# games/service.py
 from games.repository import GameRepository
-from orm.base import SyncSessionLocal  # use a sync session inside Celery tasks
+from users.repository import UserRepository
+from games.domain import Game, GameStatus
+from common.exceptions import ResourceNotFoundError
 
-@celery_app.task
-def fetch_game_metadata(game_id: int) -> None:
+async def fetch_game_metadata(game_id: int) -> None:
     """Fetch additional metadata for a game from external API."""
-    with SyncSessionLocal() as session:
+    # This runs in the same event loop, no separate process needed
+    from orm.base import AsyncSessionLocal
+    from games.repository import GameRepository
+
+    async with AsyncSessionLocal() as session:
         repo = GameRepository(session)
-        game = repo.get_by_id_sync(game_id)
+        game = await repo.get_by_id(game_id)
         if not game:
             return
         # Fetch metadata from external API
         # Update game with additional details
-        repo.save_sync(game)
+        await repo.save(game)
 
-@celery_app.task
-def update_all_game_scores() -> None:
-    """Update scores for all games from external rating services."""
-    with SyncSessionLocal() as session:
-        repo = GameRepository(session)
-        games = repo.get_all_sync()
-        for game in games:
-            # Update game scores
-            repo.save_sync(game)
+
+class GameService:
+    def __init__(self, game_repository: GameRepository, user_repository: UserRepository) -> None:
+        self.game_repository = game_repository
+        self.user_repository = user_repository
+
+    async def add_to_backlog(self, title: str, platform: str, release_date, user_id: int, background_tasks=None) -> Game:
+        user = await self.user_repository.get_by_id(user_id)
+        if not user:
+            raise ResourceNotFoundError("User not found")
+
+        game = Game(
+            id=None,
+            title=title,
+            platform=platform,
+            release_date=release_date,
+            status=GameStatus.NOT_STARTED,
+            user_id=user_id,
+        )
+        saved_game = await self.game_repository.save(game)
+
+        # Queue background task to fetch additional game info
+        if background_tasks:
+            background_tasks.add_task(fetch_game_metadata, saved_game.id)
+
+        return saved_game
 ```
 
-**Celery Configuration:**
+**Example:** Using background tasks in a router.
 
 ```python
-# workers/celery.py
-from celery import Celery
-from questr.settings import settings
+# games/router.py
+from typing import Annotated
+from fastapi import APIRouter, Depends, BackgroundTasks, status
+from games.schemas import GameCreate, GameResponse
+from games.service import GameService, fetch_game_metadata
+from games.dependencies import get_game_service
+from users.dependencies import get_current_user
+from users.domain import User
 
-celery_app = Celery("questr", broker=settings.CELERY_BROKER_URL)
-celery_app.config_from_object("questr.settings", namespace="CELERY")
-celery_app.autodiscover_tasks(["questr.workers.tasks"])
+router = APIRouter(prefix="/games", tags=["games"])
+
+
+@router.post("/", response_model=GameResponse, status_code=status.HTTP_201_CREATED)
+async def add_game(
+    payload: GameCreate,
+    background_tasks: BackgroundTasks,
+    service: Annotated[GameService, Depends(get_game_service)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> GameResponse:
+    game = await service.add_to_backlog(
+        title=payload.title,
+        platform=payload.platform,
+        release_date=payload.release_date,
+        user_id=current_user.id,
+        background_tasks=background_tasks,
+    )
+    return GameResponse.model_validate(game)
+```
+
+> **NOTE:** BackgroundTasks runs within the same process and event loop as the FastAPI application. This is suitable for I/O-bound tasks like API calls, sending emails, or simple data processing. If we later need distributed task processing (multiple workers, complex retry policies, scheduled tasks across instances), then we will consider integrating Celery at that time.
 ```
 
 #### Schemas
@@ -468,8 +504,8 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     DATABASE_URL: str
-    CELERY_BROKER_URL: str
     SECRET_KEY: str
+    DEBUG: bool = False
 
     model_config = {"env_file": ".env"}
 
@@ -477,51 +513,16 @@ class Settings(BaseSettings):
 settings = Settings()
 ```
 
-### Celery Integration Details
+## Future Improvements
 
-#### Core Celery Setup
+### When to Add Celery
 
-Celery is integrated as a separate module to handle all asynchronous processing needs:
+The current architecture uses FastAPI's built-in `BackgroundTasks`, which is sufficient for most I/O-bound operations (API calls, sending emails, light data processing). As the application scales, we may need to add Celery when:
 
-1. **Configuration Separation**: Celery configuration lives in `workers/celery.py`
-2. **Task Organization**: Tasks are grouped by domain in `workers/tasks/`
-3. **Scheduled Tasks**: Defined in `workers/schedules.py`
-4. **Session Management**: Celery tasks use a **synchronous** SQLAlchemy session (`SyncSessionLocal`) because Celery workers run in their own synchronous event loop, separate from FastAPI's async runtime
+- **Distributed processing**: tasks need to run across multiple worker processes or servers
+- **Complex retry policies**: we need exponential backoff, dead letter queues, or task chaining
+- **Scheduled tasks at scale**: we need reliable periodic tasks that persist across application restarts
+- **Rate limiting**: we need to throttle task execution rates
+- **Task result storage**: we need to store and retrieve task results programmatically
 
-#### Task Invocation Patterns
-
-Tasks can be invoked from different places in the codebase:
-
-1. **From Services**: When domain operations need background processing
-   ```python
-   # In a service method
-   from workers.tasks.game_tasks import fetch_game_metadata
-   fetch_game_metadata.delay(game_id)
-   ```
-
-2. **From Routers**: For direct API-triggered background tasks
-   ```python
-   # games/router.py
-   from workers.tasks.game_tasks import sync_user_library
-
-   @router.post("/sync", status_code=status.HTTP_202_ACCEPTED)
-   async def sync_games(
-       current_user: Annotated[User, Depends(get_current_user)],
-   ) -> dict:
-       task = sync_user_library.delay(current_user.id)
-       return {"task_id": task.id}
-   ```
-
-3. **As Scheduled Tasks**: For periodic operations
-   ```python
-   # workers/schedules.py
-   from celery.schedules import crontab
-   from workers.celery import celery_app
-
-   celery_app.conf.beat_schedule = {
-       "update-game-scores-daily": {
-           "task": "questr.workers.tasks.game_tasks.update_all_game_scores",
-           "schedule": crontab(hour=4, minute=0),  # Run at 4:00 AM
-       },
-   }
-   ```
+When the time comes to add Celery, the feature-first organization will make it straightforward to introduce a `workers/` module without disrupting existing code.
