@@ -1,5 +1,9 @@
 # Coding Guidelines
 
+## Project Root Folder
+
+The code for the backend is under the `questr` subdirectory.
+
 ## Dependency Management
 - This is a **Python 3.14** project. Use `uv` for all dependency management and virtual environment setup. Never use `poetry` or `pip`.
 
@@ -39,6 +43,7 @@ quote-style = 'single'
 - Use `factory-boy` to create model instances in tests (use `LazyAttribute` for derived fields).
 - Use `freezegun` to control time-dependent behavior in tests.
 - Set fixture scope deliberately: `scope='session'` for the DB engine, `scope='function'` for individual sessions.
+- The test paths must replicate the modules paths they're in, which is a common practice in python. E.g.: tests for code that is in `questr/questr/hello/router.py` must be in `questr/tests/hello/test_router.py`.
 
 ## Docker
 - Use `docker compose` for local development and deployment.
