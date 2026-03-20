@@ -32,3 +32,5 @@ htmlcov/
 .DS_Store
 Thumbs.db
 tmp/
+
+TODO.md
