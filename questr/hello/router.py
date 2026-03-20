@@ -1,13 +1,18 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix='/hello', tags=['hello'])
 
 
+class HelloResponse(BaseModel):
+    message: str = Field(example="Good morning!")
+
+
 def get_greeting() -> str:
     """Determine the greeting based on the current hour."""
-    hour = datetime.now().hour
+    hour = datetime.now(timezone.utc).hour
     if 0 <= hour <= 11:  # noqa: PLR2004
         return 'Good morning!'
     elif hour == 12:  # noqa: PLR2004
@@ -18,7 +23,7 @@ def get_greeting() -> str:
         return 'Good evening!'
 
 
-@router.get('')
-async def hello() -> dict:
-    """Return a greeting based on the time of day."""
-    return {'message': get_greeting()}
+@router.get('', response_model=HelloResponse)
+async def hello() -> HelloResponse:
+    """Return a greeting based on the time of day (UTC)."""
+    return HelloResponse(message=get_greeting())

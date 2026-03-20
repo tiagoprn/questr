@@ -34,4 +34,7 @@ This is a full revamp of my original Questrya project, rebuilt from the ground u
 
 ## Documentation
 
-> Detailed docs coming soon.
+### API
+
+- Swagger: <http://kvm-labs:8000/docs>
+- Redoc: <http://kvm-labs:8000/redoc>
