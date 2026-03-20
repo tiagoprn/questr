@@ -25,9 +25,10 @@ quote-style = 'single'
 ```
 
 ## Database
-- Use **PostgreSQL** (in a Docker container) as the database. Never use SQLite, translate any SQLite command/query/code to its PostgreSQL equivalent.
+- Use **PostgreSQL** 18.3 (in a Docker container) as the database. Never use SQLite, translate any SQLite command/query/code to its PostgreSQL equivalent.
 - Use `psycopg[binary]` as the Python driver.
 - Run migrations with Alembic before starting the app: `alembic upgrade head`.
+- The primary key of all tables must be UUIDv7 - do NOT use integers of any kind for that.
 
 ## Configuration
 - Manage all settings with `pydantic-settings`.
@@ -49,3 +50,7 @@ quote-style = 'single'
 - Use `docker compose` for local development and deployment.
 - Use an `entrypoint.sh` script (via `ENTRYPOINT` in `docker compose`) to run migrations before starting the app with `uvicorn`.
 - Use `pg_isready` to verify the database is online before the app starts.
+
+## etc
+
+- Whenever UUID is required, use v7. That applies to the whole codebase where an UUID is needed, not exclusively for the database.
