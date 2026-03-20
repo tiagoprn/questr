@@ -97,14 +97,14 @@ class EmailVerification(Base):
 
 ### 1. Validate Input
 The system receives the user's registration data:
-- `username` (required, string, 5-50 characters)
+- `username` (required, string, 5-50 characters after normalization)
 - `email` (required, valid email format via Pydantic EmailStr)
 - `password` (required, minimum 8 characters)
 - `password_confirmation` (required, must match `password`)
 
 **Validation Rules:**
 - Username must be unique
-- Username must be 5 to 50 characters in length
+- Username must be 5 to 50 characters in length (length check is performed after normalization)
 - Username normalization: trim whitespace, lowercase, remove special characters except underscores and hyphens, convert non-ASCII characters to ASCII equivalents
 - Email must be unique
 - Email must be valid format (validated via Pydantic EmailStr)
@@ -200,8 +200,15 @@ The system returns the created user data (excluding sensitive information):
 | 400 | Password does not meet requirements |
 | 400 | Password and password confirmation do not match |
 | 400 | Username must be between 5 and 50 characters |
+| 400 | Email does not match the provided username |
+| 400 | Invalid verification link |
+| 400 | Verification link has expired |
+| 400 | Link has already been used |
+| 403 | Account is suspended or banned |
+| 404 | User not found or already verified |
 | 409 | Username already exists |
 | 409 | Email already registered |
+| 429 | Too many requests, please try again later |
 | 500 | Failed to send verification email |
 
 ## Post-Signup Behavior
@@ -218,9 +225,17 @@ The system returns the created user data (excluding sensitive information):
    - If token is expired (`datetime.now(timezone.utc) > expires_at`) → Return 400 "Verification link has expired"
    - If token already used (`used_at` is not null) → Return 400 "Link has already been used"
 4. System marks token as used: `used_at = datetime.now(timezone.utc)`
-5. System updates user `status` to `ACTIVE`
-6. System returns success response
-7. User can now authenticate via Login Use Case
+5. **Account Status Check:**
+   - If user `status` is `SUSPENDED` or `BANNED` → Return 403 "Account is suspended or banned"
+6. System updates user `status` to `ACTIVE`
+7. System returns success response:
+   ```json
+   {
+     "message": "Email verified successfully",
+     "redirect_url": "/login?verified=true"
+   }
+   ```
+8. User can now authenticate via Login Use Case
 
 ## Resend Verification Email
 If the user does not receive the verification email or the link has expired, they can request a new one.
@@ -236,15 +251,25 @@ If the user does not receive the verification email or the link has expired, the
 ```
 
 **Validation:**
-- Username and email must match an existing user record
+- User is looked up by username first, then email is verified against that user
+- If username does not exist → Return 404 "User not found or already verified"
+- If username exists but email does not match → Return 400 "Email does not match the provided username"
 - User's `status` must be `PENDING` (not already `ACTIVE`)
-- If user not found or status is not PENDING → Return 404 "User not found or already verified"
+- If user is already `ACTIVE` → Return 404 "User not found or already verified"
+- If user `status` is `SUSPENDED` or `BANNED` → Return 403 "Account is suspended or banned"
+
+**Rate Limiting:** Maximum 3 resend requests per hour per IP address. If exceeded → Return 429 "Too many requests, please try again later"
 
 **Behavior:**
-1. Invalidate any existing unexpired verification tokens for this user
+1. Delete any existing verification tokens for this user (both expired and unexpired)
 2. Generate a new verification token
 3. Send new verification email
-4. Return success response
+4. Return success response:
+   ```json
+   { "message": "Verification email sent successfully" }
+   ```
+
+**Security Note:** The same error message is returned for "user not found" and "already verified" to prevent user enumeration attacks.
 
 ## Related Documentation
 - README.md: Questr application purpose and features
