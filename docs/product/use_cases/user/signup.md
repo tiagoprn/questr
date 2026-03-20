@@ -21,6 +21,43 @@ class UserStatus(str, Enum):
     BANNED = "banned"       # Permanently disabled
 ```
 
+### User Entity
+```python
+class User(Base):
+    __tablename__ = "users"
+
+    # Primary key - UUIDv7 for time-ordered uniqueness
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid7)
+
+    # Username (trim whitespace, lowercase, remove special chars except underscores and hyphens)
+    # Non-ASCII characters (e.g., ö, ñ, ü) are converted to ASCII equivalents
+    # Example: "  Jöhn_Doe123 " → "john_doe123"
+    username: Mapped[str] = mapped_column(String(50), unique=True)
+
+    # Email - validated via Pydantic EmailStr (handles format, DNS, etc.)
+    email: Mapped[str] = mapped_column(String(255), unique=True)
+
+    # Hashed password (never plaintext). Argon2 hashes are ~512+ chars
+    password_hash: Mapped[str] = mapped_column(String(1024))
+
+    # Role enum. Default role for new signups is "user"
+    role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.USER)
+
+    # Status. Default is PENDING until email is verified.
+    # This controls authentication eligibility: only ACTIVE users can log in.
+    status: Mapped[UserStatus] = mapped_column(
+        Enum(UserStatus),
+        default=UserStatus.PENDING
+    )
+
+    # Relationship to email verification record
+    email_verification: Mapped["EmailVerification | None"] = relationship(
+        "EmailVerification",
+        back_populates="user",
+        uselist=False
+    )
+```
+
 ### EmailVerification Table
 ```python
 class EmailVerification(Base):
@@ -32,8 +69,11 @@ class EmailVerification(Base):
     # Foreign key to users table
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), unique=True)
 
-    # Token (hashed before storage for security)
-    token_hash: Mapped[str] = mapped_column(String(128))
+    # Relationship to user
+    user: Mapped["User"] = relationship("User", back_populates="email_verification")
+
+    # Token hash (SHA-256 hex = 64 characters)
+    token_hash: Mapped[str] = mapped_column(String(64))
 
     # Expiration timestamp
     expires_at: Mapped[datetime]
@@ -58,15 +98,16 @@ class EmailVerification(Base):
 ### 1. Validate Input
 The system receives the user's registration data:
 - `username` (required, string, 5-50 characters)
-- `email` (required, valid email format)
+- `email` (required, valid email format via Pydantic EmailStr)
 - `password` (required, minimum 8 characters)
 - `password_confirmation` (required, must match `password`)
 
 **Validation Rules:**
 - Username must be unique
 - Username must be 5 to 50 characters in length
+- Username normalization: trim whitespace, lowercase, remove special characters except underscores and hyphens, convert non-ASCII characters to ASCII equivalents
 - Email must be unique
-- Email must be valid format (see ARCHITECTURE.md: Email value object)
+- Email must be valid format (validated via Pydantic EmailStr)
 - Password must meet the following requirements:
   - At least 8 characters in length
   - At least 1 uppercase letter
@@ -91,33 +132,7 @@ The system securely hashes the user's password before storing.
 - This is a mandatory security requirement
 
 ### 4. Create User Record
-The domain layer creates a new User entity:
-
-```python
-# Generate unique user ID - UUIDv7 for time-ordered uniqueness
-id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid7)
-
-# Store username (trim whitespace, lowercase, remove special chars except underscores and hyphens)
-# Example: "  Jöhn_Doe123 " → "john_doe123"
-username: Mapped[str] = mapped_column(String(50), unique=True)
-
-# Store email (trim whitespace, lowercase, strip leading/trailing dots for Gmail compatibility)
-# Example: "John.Doe@gmail.com" → "john.doe@gmail.com"
-email: Mapped[str] = mapped_column(String(255), unique=True)
-
-# Store hashed password (never plaintext). Argon2 hashes are ~512+ chars
-password_hash: Mapped[str] = mapped_column(String(1024))
-
-# Store role (enum: user, superuser). Default role for new signups is "user"
-role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.USER)
-
-# Store status. Default is PENDING until email is verified
-# This controls authentication eligibility: only ACTIVE users can log in
-status: Mapped[UserStatus] = mapped_column(
-    Enum(UserStatus),
-    default=UserStatus.PENDING  # Email verification required
-)
-```
+The domain layer creates a new User entity (see User Entity data structure above).
 
 **Architecture Note (per ARCHITECTURE.md):**
 - Domain layer handles the User entity creation
@@ -197,15 +212,39 @@ The system returns the created user data (excluding sensitive information):
 
 ## Email Verification Flow
 1. User clicks link in email → sends POST to `/api/v1/auth/verify-email` with token
-2. System looks up token by hash
-3. **Error Handling for Invalid/Expired/Used Token:**
-   - If token not found → Return 400 "Invalid verification link"
-   - If token is expired → Return 400 "Verification link has expired"
+2. System hashes the incoming token using SHA-256, then looks up the hash in the database
+3. **Validation Checks:**
+   - If token hash not found → Return 400 "Invalid verification link"
+   - If token is expired (`datetime.now(timezone.utc) > expires_at`) → Return 400 "Verification link has expired"
    - If token already used (`used_at` is not null) → Return 400 "Link has already been used"
-4. System marks token as used: `used_at = now()`
+4. System marks token as used: `used_at = datetime.now(timezone.utc)`
 5. System updates user `status` to `ACTIVE`
 6. System returns success response
 7. User can now authenticate via Login Use Case
+
+## Resend Verification Email
+If the user does not receive the verification email or the link has expired, they can request a new one.
+
+**Endpoint:** `POST /api/v1/auth/resend-verification`
+
+**Request Body:**
+```json
+{
+  "username": "newuser",
+  "email": "user@example.com"
+}
+```
+
+**Validation:**
+- Username and email must match an existing user record
+- User's `status` must be `PENDING` (not already `ACTIVE`)
+- If user not found or status is not PENDING → Return 404 "User not found or already verified"
+
+**Behavior:**
+1. Invalidate any existing unexpired verification tokens for this user
+2. Generate a new verification token
+3. Send new verification email
+4. Return success response
 
 ## Related Documentation
 - README.md: Questr application purpose and features
