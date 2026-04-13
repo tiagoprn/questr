@@ -50,6 +50,9 @@ style-autofix:  ## Run ruff to format code
 test:  ## Run the test suite
 	@uv run pytest -v
 
+test-pattern:  ## Run tests matching a pattern. Usage: make test-pattern PATTERN="test_foo or test_bar"
+	@uv run pytest -k "$(PATTERN)" -vvv
+
 test-coverage:  ## Run the test coverage report
 	@uv run pytest --cov=questr --cov-report=term-missing --cov-report=html
 
