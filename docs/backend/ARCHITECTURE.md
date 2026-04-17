@@ -30,11 +30,17 @@ questr/
 ├── __init__.py
 ├── common/                    # Shared utilities/code
 │   ├── __init__.py
-│   ├── exceptions.py
-│   └── value_objects/
+│   ├── exceptions.py          # Shared exception classes
+│   ├── enums.py               # Shared enums (UserRole, UserStatus)
+│   ├── rate_limiter.py        # Redis-based sliding window rate limiter
+│   ├── redis.py               # Redis connection pool
+│   ├── value_objects/
+│   │   ├── __init__.py
+│   │   ├── game_rating.py
+│   │   └── email.py           # Email value object using email-validator
+│   └── services/
 │       ├── __init__.py
-│       ├── game_rating.py
-│       └── email.py
+│       └── email_service.py   # Pluggable email service (SMTP / Console)
 ├── games/                     # Game feature module
 │   ├── __init__.py
 │   ├── domain.py              # Game business logic
@@ -54,10 +60,14 @@ questr/
 ├── orm/                       # Database configuration
 │   ├── __init__.py
 │   ├── base.py                # SQLAlchemy declarative base + async engine/session
-│   └── models.py              # ORM models (thin)
+│   └── models.py              # ORM models (thin, using Mapped[] style)
 ├── api/
 │   ├── __init__.py
 │   └── router.py              # Root APIRouter: includes all feature routers
+├── migrations/                 # Alembic database migrations
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/
 ├── lifespan.py                # FastAPI lifespan (startup/shutdown)
 ├── factory.py                 # App factory (create_app)
 └── settings.py                # Configuration (Pydantic BaseSettings)
@@ -83,22 +93,34 @@ Value objects are small, simple types that represent single values in your domai
 
 Think of them as enhanced primitives: instead of passing around raw strings or integers, you pass objects that know how to validate themselves and can include related behavior.
 
-**Example:** `Email` as a value object for user registration.
+**Example:** `Email` as a value object for user registration using the `email-validator` library for RFC-compliant validation.
 
 ```python
 # common/value_objects/email.py
+from email_validator import EmailNotValidError, validate_email
+
+
 class Email:
+    """Email value object using email-validator for RFC-compliant validation."""
+
     def __init__(self, value: str) -> None:
-        if not value or "@" not in value:
-            raise ValueError(f"Invalid email address: {value}")
-        self._value = value.lower()
+        try:
+            result = validate_email(value, check_deliverability=False)
+            self._value = result.normalized
+        except EmailNotValidError as exc:
+            raise ValueError(f"Invalid email address: {value}") from exc
 
     @property
     def value(self) -> str:
         return self._value
 
-    def is_corporate(self) -> bool:
-        return not self._value.endswith("@gmail.com")
+    @property
+    def domain(self) -> str:
+        return self._value.split("@")[1]
+
+    @property
+    def local_part(self) -> str:
+        return self._value.split("@")[0]
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Email):
@@ -111,86 +133,243 @@ class Email:
 
 **Why use value objects?**
 
-- **Validation in one place**: Instead of validating emails in every service or router, the `Email` class handles it
+- **Validation in one place**: Instead of validating emails in every service or router, the `Email` class handles it with RFC compliance via `email-validator`
 - **Self-documenting code**: Functions that take `Email` instead of `str` are clearer
-- **Built-in behavior**: Methods like `is_corporate()` live with the data they operate on
+- **Built-in behavior**: Methods like `domain` and `local_part` live with the data they operate on
 
 ```python
 # Using the value object
 def register_user(email: Email, name: str) -> User:
-    # Email is already validated - no need for extra checks
-    if email.is_corporate():
-        # Give corporate users premium access
-        pass
+    # Email is already validated — no need for extra checks
     ...
+```
+
+#### Email Service
+
+A pluggable email service in `common/services/` (not inside a feature module) so future features can send emails without cross-domain dependencies. Three implementations exist:
+
+- `BaseEmailService` — abstract base defining the interface
+- `SmtpEmailService` — production implementation using `aiosmtplib`
+- `ConsoleEmailService` — development-only implementation that logs instead of sending
+
+```python
+# common/services/email_service.py
+import logging
+from abc import ABC, abstractmethod
+
+logger = logging.getLogger(__name__)
+
+
+class BaseEmailService(ABC):
+    @abstractmethod
+    async def send_verification_email(
+        self, to_email: str, token: str
+    ) -> bool:
+        """Send verification email. Returns True on success."""
+        ...
+
+
+class SmtpEmailService(BaseEmailService):
+    """Email service using SMTP (e.g., Mailpit for local dev)."""
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        from_email: str,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.username = username
+        self.password = password
+        self.from_email = from_email
+
+    async def send_verification_email(
+        self, to_email: str, token: str
+    ) -> bool:
+        import aiosmtplib
+        from email.message import EmailMessage
+
+        message = EmailMessage()
+        message["From"] = self.from_email
+        message["To"] = to_email
+        message["Subject"] = "Verify your Questr account"
+        message.set_content(
+            f"Click the following link to verify your email: POST /api/v1/auth/verify-email with body: {{'token': '{token}'}}"
+        )
+
+        try:
+            await aiosmtplib.send(
+                message,
+                hostname=self.host,
+                port=self.port,
+                username=self.username,
+                password=self.password,
+                start_tls=True,
+            )
+            return True
+        except Exception:
+            logger.exception("Failed to send verification email to %s", to_email)
+            return False
+
+
+class ConsoleEmailService(BaseEmailService):
+    """Development-only email service that logs instead of sending."""
+
+    async def send_verification_email(
+        self, to_email: str, token: str
+    ) -> bool:
+        logger.info(
+            "[DEV] Would send verification email to %s with token: %s",
+            to_email,
+            token,
+        )
+        return True
+
+
+def get_email_service() -> BaseEmailService:
+    """Factory function to get the configured email service."""
+    from questr.settings import settings
+
+    if settings.EMAIL_ENABLED:
+        return SmtpEmailService(
+            host=settings.SMTP_HOST,
+            port=settings.SMTP_PORT,
+            username=settings.SMTP_USER,
+            password=settings.SMTP_PASSWORD,
+            from_email=settings.EMAIL_FROM,
+        )
+    return ConsoleEmailService()
+```
+
+#### Rate Limiting
+
+Redis-based sliding window rate limiter using sorted sets for atomic, TTL-based counting. Used for endpoints that need throttling (e.g., resend-verification).
+
+```python
+# common/rate_limiter.py
+import time
+from redis.asyncio import Redis
+
+
+class RedisRateLimiter:
+    """Rate limiter using Redis sorted sets with sliding window."""
+
+    def __init__(
+        self, redis: Redis, max_requests: int = 3, window_seconds: int = 3600
+    ) -> None:
+        self.redis = redis
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+
+    async def is_allowed(self, key: str) -> bool:
+        """Check if a request is allowed using a sliding window counter."""
+        now = time.time()
+        window_start = now - self.window_seconds
+        redis_key = f"rate_limit:{key}"
+
+        async with self.redis.pipeline(transaction=True) as pipe:
+            await pipe.zremrangebyscore(redis_key, 0, window_start)
+            await pipe.zadd(redis_key, {str(now): now})
+            await pipe.expire(redis_key, self.window_seconds)
+            await pipe.zcard(redis_key)
+            results = await pipe.execute()
+
+        request_count = results[-1]
+        return request_count <= self.max_requests
 ```
 
 #### Domain
 
 Domain objects encapsulate core business logic, rules, and behaviors central to the application. They represent the "what" of the system. Domain objects are pure Python — they have zero knowledge of FastAPI, SQLAlchemy, or Pydantic.
 
-**Example:** `Game` domain object containing game state management and business rules.
+**Example:** `User` and `EmailVerification` domain objects.
 
 ```python
-# games/domain.py
-from datetime import datetime
-from common.exceptions import InvalidGameStateError
+# users/domain.py
+from dataclasses import dataclass
+from uuid import UUID
+from questr.common.enums import UserRole, UserStatus
 
-class Game:
-    def __init__(self, id, title, platform, release_date, status, completion_date=None):
-        self.id = id
-        self.title = title
-        self.platform = platform
-        self.release_date = release_date
-        self.status = status
-        self.completion_date = completion_date
 
-    def mark_completed(self, completion_date=None) -> None:
-        if self.status == GameStatus.ABANDONED:
-            raise InvalidGameStateError("Cannot complete an abandoned game")
-        self.status = GameStatus.COMPLETED
-        self.completion_date = completion_date or datetime.now()
+@dataclass
+class User:
+    """User domain object."""
+    id: UUID | None = None
+    username: str = ""
+    email: str = ""
+    first_name: str = ""
+    last_name: str = ""
+    password_hash: str = ""
+    role: UserRole = UserRole.USER
+    status: UserStatus = UserStatus.PENDING
+
+
+@dataclass
+class EmailVerification:
+    """Email verification domain object."""
+    id: UUID | None = None
+    user_id: UUID | None = None
+    token_hash: str = ""
+    expires_at: datetime | None = None
+    used_at: datetime | None = None
 ```
 
 #### Repository
 
 Repositories abstract data access logic and provide methods to retrieve and persist domain objects. In FastAPI, repositories receive an async SQLAlchemy `AsyncSession` injected via `Depends`.
 
-**Example:** `GameRepository` handling game ORM and retrieval.
+**Example:** `UserRepository` handling user ORM and retrieval.
 
 ```python
-# games/repository.py
-from sqlalchemy.ext.asyncio import AsyncSession
+# users/repository.py
+from uuid import UUID
 from sqlalchemy import select
-from orm.models import GameModel
-from games.domain import Game
+from sqlalchemy.ext.asyncio import AsyncSession
 
-class GameRepository:
+from questr.orm.models import UserORMModel
+from questr.users.domain import User
+
+
+class UserRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def get_by_id(self, game_id: int) -> Game | None:
-        result = await self.session.execute(
-            select(GameModel).where(GameModel.id == game_id)
+    async def create(self, user: User) -> User:
+        orm_user = UserORMModel(
+            id=user.id,
+            username=user.username,
+            email=user.email,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            password_hash=user.password_hash,
+            role=user.role,
+            status=user.status,
         )
-        game_model = result.scalar_one_or_none()
-        return self._to_domain(game_model) if game_model else None
+        self.session.add(orm_user)
+        await self.session.flush()
+        return self._to_domain(orm_user)
 
-    async def get_backlog(self, user_id: int, status=None) -> list[Game]:
-        query = select(GameModel).where(GameModel.user_id == user_id)
-        if status:
-            query = query.where(GameModel.status == status.value)
-        result = await self.session.execute(query)
-        return [self._to_domain(g) for g in result.scalars().all()]
+    async def get_by_username(self, username: str) -> User | None:
+        result = await self.session.execute(
+            select(UserORMModel).where(UserORMModel.username == username)
+        )
+        orm_user = result.scalar_one_or_none()
+        return self._to_domain(orm_user) if orm_user else None
 
-    def _to_domain(self, model: GameModel) -> Game:
-        return Game(
-            id=model.id,
-            title=model.title,
-            platform=model.platform,
-            release_date=model.release_date,
-            status=GameStatus(model.status),
-            completion_date=model.completion_date,
+    @staticmethod
+    def _to_domain(orm_user: UserORMModel) -> User:
+        return User(
+            id=orm_user.id,
+            username=orm_user.username,
+            email=orm_user.email,
+            first_name=orm_user.first_name,
+            last_name=orm_user.last_name,
+            password_hash=orm_user.password_hash,
+            role=orm_user.role,
+            status=orm_user.status,
         )
 ```
 
@@ -198,63 +377,96 @@ class GameRepository:
 
 Services coordinate complex operations involving multiple domain objects or repositories. They implement application use cases and orchestrate business processes. In FastAPI, services are typically instantiated via `Depends` in a feature's `dependencies.py` — they are not singletons.
 
-**Example:** `GameService` handling operations like game updates or status changes.
+**Example:** `AuthService` handling signup, verify-email, and resend-verification use cases.
 
 ```python
-# games/service.py
-from games.repository import GameRepository
-from users.repository import UserRepository
-from games.domain import Game, GameStatus
-from common.exceptions import ResourceNotFoundError
+# users/service.py
+from questr.common.exceptions import UserAlreadyExistsError
+from questr.common.rate_limiter import RedisRateLimiter
+from questr.common.services.email_service import BaseEmailService
+from questr.users.domain import (
+    User,
+    generate_verification_token,
+    normalize_username,
+    validate_password,
+)
+from questr.users.repository import (
+    EmailVerificationRepository,
+    UserRepository,
+)
 
-class GameService:
-    def __init__(self, game_repository: GameRepository, user_repository: UserRepository) -> None:
-        self.game_repository = game_repository
-        self.user_repository = user_repository
 
-    async def add_to_backlog(self, title: str, platform: str, release_date, user_id: int) -> Game:
-        user = await self.user_repository.get_by_id(user_id)
-        if not user:
-            raise ResourceNotFoundError("User not found")
+class AuthService:
+    def __init__(
+        self,
+        user_repo: UserRepository,
+        verification_repo: EmailVerificationRepository,
+        email_service: BaseEmailService,
+        rate_limiter: RedisRateLimiter,
+    ) -> None:
+        self.user_repo = user_repo
+        self.verification_repo = verification_repo
+        self.email_service = email_service
+        self.rate_limiter = rate_limiter
 
-        game = Game(
-            id=None,
-            title=title,
-            platform=platform,
-            release_date=release_date,
-            status=GameStatus.NOT_STARTED,
-            user_id=user_id,
+    async def signup(
+        self,
+        username: str,
+        email: str,
+        first_name: str,
+        last_name: str,
+        password: str,
+        password_confirmation: str,
+        client_ip: str,
+    ) -> User:
+        if password != password_confirmation:
+            raise ValueError("Passwords do not match")
+
+        result = validate_password(password)
+        if not result.is_valid:
+            raise ValueError("; ".join(result.errors))
+
+        normalized_username = normalize_username(username)
+
+        existing = await self.user_repo.get_by_username(normalized_username)
+        if existing:
+            raise UserAlreadyExistsError("Username already exists")
+        existing = await self.user_repo.get_by_email(email)
+        if existing:
+            raise UserAlreadyExistsError("Email already exists")
+
+        user = User(
+            id=uuid7(),
+            username=normalized_username,
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            password_hash=hash_password(password),
+            role=UserRole.USER,
+            status=UserStatus.PENDING,
         )
-        saved_game = await self.game_repository.save(game)
-
-        # Queue background task to fetch additional game info
-        from workers.tasks.game_tasks import fetch_game_metadata
-        fetch_game_metadata.delay(saved_game.id)
-
-        return saved_game
+        return await self.user_repo.create(user)
 ```
 
 #### Dependencies
 
-`dependencies.py` is a FastAPI-specific file inside each feature module. It contains `Depends` provider functions that wire up repositories and services to the async DB session.
+`dependencies.py` is a FastAPI-specific file inside each feature module. It contains `Depends` provider functions that wire up repositories, services, rate limiters, and the email service to the async DB session.
 
-**Example:** Game dependencies.
+**Example:** User dependencies.
 
 ```python
-# games/dependencies.py
+# users/dependencies.py
 from typing import Annotated
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from orm.base import get_async_session
-from games.repository import GameRepository
-from users.repository import UserRepository
-from games.service import GameService
 
-
-async def get_game_repository(
-    session: Annotated[AsyncSession, Depends(get_async_session)],
-) -> GameRepository:
-    return GameRepository(session)
+from questr.orm.base import get_async_session
+from questr.settings import settings
+from questr.users.repository import (
+    EmailVerificationRepository,
+    UserRepository,
+)
+from questr.users.service import AuthService
 
 
 async def get_user_repository(
@@ -263,127 +475,84 @@ async def get_user_repository(
     return UserRepository(session)
 
 
-async def get_game_service(
-    game_repo: Annotated[GameRepository, Depends(get_game_repository)],
-    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
-) -> GameService:
-    return GameService(game_repo, user_repo)
-```
-
-#### Background Tasks
-
-Background tasks handle time-consuming operations that should run outside the main request flow. FastAPI provides a built-in `BackgroundTasks` mechanism that is suitable for most use cases without requiring additional infrastructure.
-
-**Example:** Triggering a background task from a service.
-
-```python
-# games/service.py
-from games.repository import GameRepository
-from users.repository import UserRepository
-from games.domain import Game, GameStatus
-from common.exceptions import ResourceNotFoundError
-
-async def fetch_game_metadata(game_id: int) -> None:
-    """Fetch additional metadata for a game from external API."""
-    # This runs in the same event loop, no separate process needed
-    from orm.base import AsyncSessionLocal
-    from games.repository import GameRepository
-
-    async with AsyncSessionLocal() as session:
-        repo = GameRepository(session)
-        game = await repo.get_by_id(game_id)
-        if not game:
-            return
-        # Fetch metadata from external API
-        # Update game with additional details
-        await repo.save(game)
+async def get_verification_repository(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+) -> EmailVerificationRepository:
+    return EmailVerificationRepository(session)
 
 
-class GameService:
-    def __init__(self, game_repository: GameRepository, user_repository: UserRepository) -> None:
-        self.game_repository = game_repository
-        self.user_repository = user_repository
-
-    async def add_to_backlog(self, title: str, platform: str, release_date, user_id: int, background_tasks=None) -> Game:
-        user = await self.user_repository.get_by_id(user_id)
-        if not user:
-            raise ResourceNotFoundError("User not found")
-
-        game = Game(
-            id=None,
-            title=title,
-            platform=platform,
-            release_date=release_date,
-            status=GameStatus.NOT_STARTED,
-            user_id=user_id,
-        )
-        saved_game = await self.game_repository.save(game)
-
-        # Queue background task to fetch additional game info
-        if background_tasks:
-            background_tasks.add_task(fetch_game_metadata, saved_game.id)
-
-        return saved_game
-```
-
-**Example:** Using background tasks in a router.
-
-```python
-# games/router.py
-from typing import Annotated
-from fastapi import APIRouter, Depends, BackgroundTasks, status
-from games.schemas import GameCreate, GameResponse
-from games.service import GameService, fetch_game_metadata
-from games.dependencies import get_game_service
-from users.dependencies import get_current_user
-from users.domain import User
-
-router = APIRouter(prefix="/games", tags=["games"])
-
-
-@router.post("/", response_model=GameResponse, status_code=status.HTTP_201_CREATED)
-async def add_game(
-    payload: GameCreate,
-    background_tasks: BackgroundTasks,
-    service: Annotated[GameService, Depends(get_game_service)],
-    current_user: Annotated[User, Depends(get_current_user)],
-) -> GameResponse:
-    game = await service.add_to_backlog(
-        title=payload.title,
-        platform=payload.platform,
-        release_date=payload.release_date,
-        user_id=current_user.id,
-        background_tasks=background_tasks,
+async def get_rate_limiter() -> RedisRateLimiter:
+    from questr.common.redis import get_redis
+    redis = get_redis()
+    return RedisRateLimiter(
+        redis=redis,
+        max_requests=settings.RATE_LIMIT_RESEND_MAX,
+        window_seconds=settings.RATE_LIMIT_RESEND_WINDOW_HOURS * 3600,
     )
-    return GameResponse.model_validate(game)
-```
 
-> **NOTE:** BackgroundTasks runs within the same process and event loop as the FastAPI application. This is suitable for I/O-bound tasks like API calls, sending emails, or simple data processing. If we later need distributed task processing (multiple workers, complex retry policies, scheduled tasks across instances), then we will consider integrating Celery at that time.
+
+def get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+async def get_auth_service(
+    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
+    verification_repo: Annotated[
+        EmailVerificationRepository, Depends(get_verification_repository)
+    ],
+    email_service: Annotated[
+        BaseEmailService, Depends(get_email_service)
+    ],
+    rate_limiter: Annotated[RedisRateLimiter, Depends(get_rate_limiter)],
+) -> AuthService:
+    return AuthService(
+        user_repo=user_repo,
+        verification_repo=verification_repo,
+        email_service=email_service,
+        rate_limiter=rate_limiter,
+    )
+
+
+T_AuthService = Annotated[AuthService, Depends(get_auth_service)]
+T_ClientIP = Annotated[str, Depends(get_client_ip)]
 ```
 
 #### Schemas
 
 Schemas are **Pydantic `BaseModel`** subclasses — FastAPI uses them natively for request body validation and response serialization.
 
-**Example:** `GameCreate` Pydantic models for request and response.
+**Example:** Auth request/response Pydantic models.
 
 ```python
-# games/schemas.py
-from datetime import date, datetime
-from pydantic import BaseModel
+# users/schemas.py
+from datetime import datetime
+from uuid import UUID
 
-class GameCreateRequest(BaseModel):
-    title: str
-    platform: str
-    release_date: date | None = None
+from pydantic import BaseModel, EmailStr
 
-class GameCreateResponse(BaseModel):
-    id: int
-    title: str
-    platform: str
-    release_date: date | None
-    status: str
-    completion_date: datetime | None
+from questr.common.enums import UserRole, UserStatus
+
+
+class SignupRequest(BaseModel):
+    username: str
+    email: EmailStr
+    first_name: str
+    last_name: str
+    password: str
+    password_confirmation: str
+
+
+class SignupResponse(BaseModel):
+    id: UUID
+    username: str
+    email: str
+    first_name: str
+    last_name: str
+    role: UserRole
+    status: UserStatus
 
     model_config = {"from_attributes": True}
 ```
@@ -392,79 +561,211 @@ class GameCreateResponse(BaseModel):
 
 `router.py` files are the HTTP entry points of each feature module. They define the API endpoints using FastAPI's `APIRouter`, keeping route declarations co-located with the rest of the feature's code.
 
-Each handler is declared as `async def`, so it participates naturally in FastAPI's async request lifecycle without blocking the event loop. Request bodies are typed as Pydantic schema parameters — FastAPI validates incoming JSON against them automatically and returns clean error responses when validation fails. Outgoing data is controlled by the `response_model` parameter on the route decorator, which both serializes the response and drives the auto-generated OpenAPI documentation. The authenticated user is provided via `Depends`, injected from `users/dependencies.py`.
+Each handler is declared as `async def`, so it participates naturally in FastAPI's async request lifecycle without blocking the event loop. Request bodies are typed as Pydantic schema parameters — FastAPI validates incoming JSON against them automatically and returns clean error responses when validation fails. Outgoing data is controlled by the `response_model` parameter on the route decorator, which both serializes the response and drives the auto-generated OpenAPI documentation.
 
-
-**Example:** Game API endpoints.
+**Example:** Auth API endpoints.
 
 ```python
-# games/router.py
-from typing import Annotated
-from fastapi import APIRouter, Depends, status
-from games.schemas import GameCreate, GameResponse
-from games.service import GameService
-from games.dependencies import get_game_service
-from users.dependencies import get_current_user
-from users.domain import User
+# users/router.py
+from fastapi import APIRouter, status
 
-router = APIRouter(prefix="/games", tags=["games"])
+from questr.common.exceptions import (
+    InvalidVerificationTokenError,
+    RateLimitExceededError,
+    UserAlreadyExistsError,
+)
+from questr.users.dependencies import T_AuthService, T_ClientIP
+from questr.users.schemas import (
+    ResendVerificationRequest,
+    ResendVerificationResponse,
+    SignupRequest,
+    SignupResponse,
+    VerifyEmailRequest,
+    VerifyEmailResponse,
+)
+
+router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
 
-@router.post("/", response_model=GameResponse, status_code=status.HTTP_201_CREATED)
-async def add_game(
-    payload: GameCreate,
-    service: Annotated[GameService, Depends(get_game_service)],
-    current_user: Annotated[User, Depends(get_current_user)],
-) -> GameResponse:
-    game = await service.add_to_backlog(
-        title=payload.title,
-        platform=payload.platform,
-        release_date=payload.release_date,
-        user_id=current_user.id,
+@router.post(
+    "/signup",
+    response_model=SignupResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        400: {"model": PasswordValidationError},
+        409: {"description": "Username or email already exists"},
+    },
+)
+async def signup(
+    payload: SignupRequest,
+    service: T_AuthService,
+    client_ip: T_ClientIP,
+) -> SignupResponse:
+    user = await service.signup(
+        username=payload.username,
+        email=payload.email,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        password=payload.password,
+        password_confirmation=payload.password_confirmation,
+        client_ip=client_ip,
     )
-    return GameResponse.model_validate(game)
+    return SignupResponse.model_validate(user)
+
+
+@router.post(
+    "/verify-email",
+    response_model=VerifyEmailResponse,
+    responses={400: {"description": "Invalid or expired token"}},
+)
+async def verify_email(
+    payload: VerifyEmailRequest,
+    service: T_AuthService,
+) -> VerifyEmailResponse:
+    user = await service.verify_email(payload.token)
+    return VerifyEmailResponse.model_validate(user)
+
+
+@router.post(
+    "/resend-verification",
+    response_model=ResendVerificationResponse,
+    responses={429: {"description": "Rate limit exceeded"}},
+)
+async def resend_verification(
+    payload: ResendVerificationRequest,
+    service: T_AuthService,
+    client_ip: T_ClientIP,
+) -> ResendVerificationResponse:
+    await service.resend_verification(email=payload.email, client_ip=client_ip)
+    return ResendVerificationResponse(
+        message="If an account with this email exists, "
+        "a new verification email has been sent."
+    )
 ```
 
 #### Persistence
 
-The ORM layer uses **SQLAlchemy with `DeclarativeBase`** (SQLAlchemy 2.x style). The async engine and session factory live in `orm/base.py`, providing the `get_async_session` dependency used across all repositories.
+The ORM layer uses **SQLAlchemy with `DeclarativeBase`** (SQLAlchemy 2.x style) and modern `Mapped[]` style column definitions. The async engine and session factory live in `orm/base.py`, providing the `get_async_session` dependency used across all repositories. UUIDv7 values are used for primary keys (provided by Python 3.14's `uuid` module as `uuid7()`).
 
-**Example:** Thin ORM models and async session setup.
-
-```python
-# orm/base.py
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
-from questr.settings import settings
-
-engine = create_async_engine(settings.DATABASE_URL, echo=False, pool_pre_ping=True)
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-async def get_async_session() -> AsyncSession:
-    async with AsyncSessionLocal() as session:
-        yield session
-```
+**Example:** Thin ORM models using `Mapped[]` style.
 
 ```python
 # orm/models.py
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey
-from orm.base import Base
+from datetime import datetime
+from uuid import UUID
 
-class GameModel(Base):
-    __tablename__ = "games"
+from sqlalchemy import DateTime, Enum, ForeignKey, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import UUID as SAUUID
 
-    id = Column(Integer, primary_key=True)
-    title = Column(String(100), nullable=False)
-    platform = Column(String(50), nullable=False)
-    release_date = Column(Date)
-    status = Column(String(20), nullable=False)
-    completion_date = Column(DateTime)
-    user_id = Column(Integer, ForeignKey("users.id"))
+from questr.common.enums import UserRole, UserStatus
+from questr.orm.base import Base
+
+
+class UserORMModel(Base):
+    __tablename__ = "users"
+
+    id: Mapped[UUID] = mapped_column(SAUUID, primary_key=True)
+    username: Mapped[str] = mapped_column(
+        String(50), unique=True, nullable=False
+    )
+    email: Mapped[str] = mapped_column(
+        String(255), unique=True, nullable=False
+    )
+    first_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    last_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(1024), nullable=False)
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole), default=UserRole.USER, nullable=False
+    )
+    status: Mapped[UserStatus] = mapped_column(
+        Enum(UserStatus), default=UserStatus.PENDING, nullable=False
+    )
+
+
+class EmailVerificationORMModel(Base):
+    __tablename__ = "email_verifications"
+    __table_args__ = (UniqueConstraint("user_id"),)
+
+    id: Mapped[UUID] = mapped_column(SAUUID, primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(
+        SAUUID, ForeignKey("users.id"), unique=True, nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+```
+
+#### Exception Handling
+
+Domain exceptions are mapped to HTTP status codes via exception handlers registered in `factory.py`. Each exception class lives in `common/exceptions.py`.
+
+**Example:** Domain exceptions and their HTTP mappings.
+
+```python
+# common/exceptions.py
+class QuestrException(Exception):
+    """Base exception for all questr domain exceptions."""
+    pass
+
+
+class UserAlreadyExistsError(QuestrException):
+    """Raised when username or email already exists."""
+    pass
+
+
+class InvalidVerificationTokenError(QuestrException):
+    """Raised for invalid/expired verification tokens."""
+    pass
+
+
+class RateLimitExceededError(QuestrException):
+    """Raised when rate limit is exceeded."""
+    pass
+```
+
+```python
+# factory.py
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from questr.common.exceptions import (
+    InvalidVerificationTokenError,
+    RateLimitExceededError,
+    UserAlreadyExistsError,
+)
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="questr", lifespan=lifespan)
+
+    app.add_exception_handler(
+        UserAlreadyExistsError,
+        lambda request, exc: JSONResponse(
+            status_code=409, content={"detail": str(exc)}
+        ),
+    )
+    app.add_exception_handler(
+        InvalidVerificationTokenError,
+        lambda request, exc: JSONResponse(
+            status_code=400, content={"detail": str(exc)}
+        ),
+    )
+    app.add_exception_handler(
+        RateLimitExceededError,
+        lambda request, exc: JSONResponse(
+            status_code=429, content={"detail": str(exc)}
+        ),
+    )
+
+    app.include_router(api_router)
+    return app
 ```
 
 #### API Router Registration
@@ -476,45 +777,46 @@ class GameModel(Base):
 ```python
 # api/router.py
 from fastapi import APIRouter
-from games.router import router as games_router
-from users.router import router as users_router
+
+from questr.users.router import router as users_router
 
 api_router = APIRouter(prefix="/api")
-api_router.include_router(games_router)
 api_router.include_router(users_router)
 ```
 
 #### App Factory & Lifespan
 
-The app factory pattern maps directly to FastAPI. Startup and shutdown resources (such as the database engine) are managed through the `lifespan` async context manager, which replaces any ad-hoc initialization hooks with a single, clean `async with` lifecycle tied to the application.
-
+The app factory pattern maps directly to FastAPI. Startup and shutdown resources (database engine and Redis connection pool) are managed through the `lifespan` async context manager.
 
 **Example:** Lifespan and app factory.
 
 ```python
 # lifespan.py
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
-from orm.base import engine
+
+from questr.common.redis import close_redis
+from questr.orm.base import engine
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # startup
     yield
-    # shutdown
     await engine.dispose()
+    await close_redis()
 ```
 
 ```python
 # factory.py
 from fastapi import FastAPI
-from api.router import api_router
-from lifespan import lifespan
+
+from questr.api.router import api_router
+from questr.lifespan import lifespan
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="questr", lifespan=lifespan)
+    app = FastAPI(title="questr", version="0.1.0", lifespan=lifespan)
     app.include_router(api_router)
     return app
 ```
@@ -529,14 +831,49 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str
-    SECRET_KEY: str
+    APP_NAME: str = "questr"
     DEBUG: bool = False
+    DATABASE_URL: str = (
+        "postgresql+psycopg://app_user:app_password"
+        "@questr_database:5432/app_db"
+    )
 
-    model_config = {"env_file": ".env"}
+    # Redis
+    REDIS_URL: str = "redis://localhost:6379/0"
+
+    # Email settings
+    EMAIL_ENABLED: bool = False
+    SMTP_HOST: str = "localhost"
+    SMTP_PORT: int = 1025
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    EMAIL_FROM: str = "noreply@questr.app"
+
+    # Rate limiting
+    RATE_LIMIT_RESEND_MAX: int = 3
+    RATE_LIMIT_RESEND_WINDOW_HOURS: int = 1
+
+    model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()
+```
+
+#### Database Migrations
+
+Database schema changes are managed with **Alembic**. Migrations are stored in `migrations/`. Initialize Alembic with `alembic init migrations`, configure `migrations/env.py` to import `Base` from `questr.orm.base`, and use async support.
+
+**Makefile commands:**
+
+```makefile
+db-create-migration:  ## Create a new migration. Usage: make db-create-migration MSG="description"
+	@alembic revision --autogenerate -m "$(MSG)"
+
+db-upgrade:  ## Apply all pending migrations
+	@alembic upgrade head
+
+db-downgrade:  ## Rollback last migration
+	@alembic downgrade -1
 ```
 
 ## Future Improvements

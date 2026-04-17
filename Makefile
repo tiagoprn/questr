@@ -64,3 +64,12 @@ docker-down:  ## Stop docker containers
 
 docker-logs:  ## Show docker logs
 	@docker compose logs -f
+
+db-create-migration:  ## Create a new migration. Usage: make db-create-migration MSG="description"
+	@alembic revision --autogenerate -m "$(MSG)"
+
+db-upgrade:  ## Apply all pending migrations
+	@alembic upgrade head
+
+db-downgrade:  ## Rollback last migration
+	@alembic downgrade -1
