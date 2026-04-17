@@ -13,7 +13,7 @@ This is a full revamp of my original Questrya project, rebuilt from the ground u
 
 ## Tech Stack
 
-**Backend**
+### Backend
 
 
 | Tool | Technology |
@@ -24,13 +24,31 @@ This is a full revamp of my original Questrya project, rebuilt from the ground u
 | Frameworks | FastAPI, SQLAlchemy |
 | Database | PostgreSQL |
 
-**Frontend**
+### Frontend
 
 > Detailed docs coming soon.
 
-**Ops**
+### Ops
 
 > Detailed docs coming soon.
+
+## Database Migrations
+
+This project uses Alembic for database migrations. Use these Makefile commands:
+
+| Command | Description |
+| :-- | :-- |
+| `make db-create-migration MSG="description"` | Create a new auto-generated migration |
+| `make db-upgrade` | Apply all pending migrations |
+| `make db-downgrade` | Rollback the last migration |
+
+### Workflow
+
+1. Modify ORM models in `questr/orm/models.py`
+2. Run `make db-create-migration MSG="Add users table"` to generate a migration
+3. Review the generated migration file
+4. Run `make db-upgrade` to apply it
+5. To rollback: `make db-downgrade`
 
 ## Documentation
 
