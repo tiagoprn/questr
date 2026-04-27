@@ -4,7 +4,7 @@
 
 This implements Clean Architecture with a Feature-First approach, combining Domain-Driven Design principles with a practical organization strategy.
 
-Instead of traditional horizontal layers (controllers, services, repositories) that span across the entire application, the codebase is organized around feature modules (users, auth, games) that then have the layers defined inside each one of them.
+Instead of traditional horizontal layers (controllers, services, repositories) that span across the entire application, the codebase is organized around feature modules (e.g., users) that then have the layers defined inside each one of them.
 
 So, it has clear domain, service, and repository layers inside each feature module. It keeps all code for a feature (HTTP, use cases, domain, persistence) co-located for fast iteration, while enforcing clear dependency rules so it can comfortably grow into richer DDD, Clean, or Hexagonal styles as the system evolves.
 
@@ -41,14 +41,6 @@ questr/
 │   └── services/
 │       ├── __init__.py
 │       └── email_service.py   # Pluggable email service (SMTP / Console)
-├── games/                     # Game feature module
-│   ├── __init__.py
-│   ├── domain.py              # Game business logic
-│   ├── repository.py          # Game data access
-│   ├── service.py             # Game operations (holds the use cases)
-│   ├── schemas.py             # Pydantic request/response models
-│   ├── dependencies.py        # FastAPI Depends providers (dependency injection) for this feature
-│   └── router.py              # Game API endpoints (APIRouter)
 ├── users/                     # User feature module
 │   ├── __init__.py
 │   ├── domain.py
@@ -880,7 +872,7 @@ db-downgrade:  ## Rollback last migration
 
 ### When to Add Celery
 
-The current architecture uses FastAPI's built-in `BackgroundTasks`, which is sufficient for most I/O-bound operations (API calls, sending emails, light data processing). As the application scales, we may need to add Celery when:
+The current architecture handles I/O-bound work (sending verification emails, light data processing) directly within request handlers. As the application scales, we may need to add Celery when:
 
 - **Distributed processing**: tasks need to run across multiple worker processes or servers
 - **Complex retry policies**: we need exponential backoff, dead letter queues, or task chaining

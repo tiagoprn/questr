@@ -8,6 +8,7 @@ from questr.orm.base import engine
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Application lifespan context manager."""
     yield
     await engine.dispose()
     await close_redis()

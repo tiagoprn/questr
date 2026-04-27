@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from uuid import uuid7
 
 import factory
@@ -16,6 +17,10 @@ class UserFactory(factory.Factory):
     email = Faker('email')
     first_name = Faker('first_name')
     last_name = Faker('last_name')
+    # NOTE: do not remove the 2 comments below, they must stay because it
+    # is non-obvious to a human.
+    # password_hash uses a placeholder Argon2 hash string.
+    # For tests that need real hashing, we'll use the `hash_password()` utility.
     password_hash = factory.LazyFunction(
         lambda: '$argon2id$v=19$m=65536,t=3,p=4$mockhash'
     )
@@ -31,9 +36,6 @@ class EmailVerificationFactory(factory.Factory):
     user_id = factory.LazyFunction(uuid7)
     token_hash = Faker('sha256')
     expires_at = factory.LazyFunction(
-        lambda: __import__('datetime').datetime.now(
-            __import__('datetime').timezone.utc
-        )
-        + __import__('datetime').timedelta(hours=24)
+        lambda: datetime.now(timezone.utc) + timedelta(hours=24)
     )
     used_at = None

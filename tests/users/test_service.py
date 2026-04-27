@@ -2,7 +2,7 @@
 # noqa: PLR6301,PLR2004
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import uuid7
 
 import pytest
 
@@ -77,7 +77,7 @@ class TestSignup:
         mock_user_repo.get_by_username.return_value = None
         mock_user_repo.get_by_email.return_value = None
         mock_user_repo.create.return_value = User(
-            id=uuid4(),
+            id=uuid7(),
             username='testuser',
             email='test@example.com',
             first_name='Test',
@@ -87,8 +87,8 @@ class TestSignup:
             status=UserStatus.PENDING,
         )
         mock_verification_repo.create.return_value = EmailVerification(
-            id=uuid4(),
-            user_id=uuid4(),
+            id=uuid7(),
+            user_id=uuid7(),
             token_hash='hash',
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
         )
@@ -115,7 +115,7 @@ class TestSignup:
         mock_user_repo: MagicMock,
     ) -> None:
         mock_user_repo.get_by_username.return_value = User(
-            id=uuid4(), username='testuser'
+            id=uuid7(), username='testuser'
         )
 
         with pytest.raises(UserAlreadyExistsError):
@@ -137,7 +137,7 @@ class TestSignup:
     ) -> None:
         mock_user_repo.get_by_username.return_value = None
         mock_user_repo.get_by_email.return_value = User(
-            id=uuid4(), email='test@example.com'
+            id=uuid7(), email='test@example.com'
         )
 
         with pytest.raises(UserAlreadyExistsError):
@@ -192,10 +192,10 @@ class TestVerifyEmail:
         mock_verification_repo: MagicMock,
         mock_user_repo: MagicMock,
     ) -> None:
-        user_id = uuid4()
+        user_id = uuid7()
         mock_verification_repo.get_by_token_hash.return_value = (
             EmailVerification(
-                id=uuid4(),
+                id=uuid7(),
                 user_id=user_id,
                 token_hash='valid_hash',
                 expires_at=(
@@ -237,8 +237,8 @@ class TestVerifyEmail:
     ) -> None:
         mock_verification_repo.get_by_token_hash.return_value = (
             EmailVerification(
-                id=uuid4(),
-                user_id=uuid4(),
+                id=uuid7(),
+                user_id=uuid7(),
                 token_hash='used_hash',
                 expires_at=(
                     datetime.now(timezone.utc) + timedelta(hours=24)
@@ -258,8 +258,8 @@ class TestVerifyEmail:
     ) -> None:
         mock_verification_repo.get_by_token_hash.return_value = (
             EmailVerification(
-                id=uuid4(),
-                user_id=uuid4(),
+                id=uuid7(),
+                user_id=uuid7(),
                 token_hash='expired_hash',
                 expires_at=(
                     datetime.now(timezone.utc) - timedelta(hours=1)
@@ -280,7 +280,7 @@ class TestResendVerification:
         mock_user_repo: MagicMock,
         mock_verification_repo: MagicMock,
     ) -> None:
-        user_id = uuid4()
+        user_id = uuid7()
         mock_user_repo.get_by_email.return_value = User(
             id=user_id,
             username='testuser',
@@ -289,7 +289,7 @@ class TestResendVerification:
         )
         mock_verification_repo.delete_by_user_id.return_value = 1
         mock_verification_repo.create.return_value = EmailVerification(
-            id=uuid4(),
+            id=uuid7(),
             user_id=user_id,
             token_hash='new_hash',
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),

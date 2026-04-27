@@ -2,7 +2,8 @@ import hashlib
 from datetime import datetime, timezone
 from uuid import uuid7
 
-from argon2 import PasswordHasher
+from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
 
 from questr.common.enums import UserRole, UserStatus
 from questr.common.exceptions import (
@@ -25,7 +26,7 @@ from questr.users.repository import (
     UserRepository,
 )
 
-pwd_context = PasswordHasher()
+pwd_context = PasswordHash(hashers=[Argon2Hasher()])
 
 
 def hash_password(password: str) -> str:

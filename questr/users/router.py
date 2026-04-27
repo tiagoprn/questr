@@ -1,6 +1,5 @@
 from fastapi import APIRouter, status
 
-from questr.common.exceptions import UserAlreadyExistsError
 from questr.users.dependencies import T_AuthService, T_ClientIP
 from questr.users.schemas import (
     PasswordValidationError,
@@ -29,18 +28,15 @@ async def signup(
     service: T_AuthService,
     client_ip: T_ClientIP,
 ) -> SignupResponse:
-    try:
-        user = await service.signup(
-            username=payload.username,
-            email=payload.email,
-            first_name=payload.first_name,
-            last_name=payload.last_name,
-            password=payload.password,
-            password_confirmation=payload.password_confirmation,
-            client_ip=client_ip,
-        )
-    except UserAlreadyExistsError:
-        raise
+    user = await service.signup(
+        username=payload.username,
+        email=payload.email,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        password=payload.password,
+        password_confirmation=payload.password_confirmation,
+        client_ip=client_ip,
+    )
     return SignupResponse.model_validate(user)
 
 

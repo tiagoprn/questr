@@ -1,6 +1,6 @@
 # ruff: noqa: PLR6301,PLR2004,PLR0913,PLR0917
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import uuid7
 
 import pytest
 import pytest_asyncio
@@ -23,7 +23,7 @@ class TestUserRepository:
         self, db_session: AsyncSession
     ) -> tuple[UserRepository, User]:
         repo = UserRepository(db_session)
-        uid = uuid4()
+        uid = uuid7()
         user = User(
             id=uid,
             username=f'testuser_{uid.hex[:8]}',
@@ -42,7 +42,7 @@ class TestUserRepository:
     async def test_create_inserts_user(
         self, repo: UserRepository, db_session: AsyncSession
     ) -> None:
-        uid = uuid4()
+        uid = uuid7()
         user = User(
             id=uid,
             username=f'alice_{uid.hex[:8]}',
@@ -111,7 +111,7 @@ class TestEmailVerificationRepository:
         orm_user: UserORMModel,
     ) -> None:
         verification = EmailVerification(
-            id=uuid4(),
+            id=uuid7(),
             user_id=orm_user.id,
             token_hash='tokenhash123',
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
@@ -129,7 +129,7 @@ class TestEmailVerificationRepository:
     ) -> None:
         token_hash = 'findme_hash_456'
         verification = EmailVerification(
-            id=uuid4(),
+            id=uuid7(),
             user_id=orm_user.id,
             token_hash=token_hash,
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
@@ -149,7 +149,7 @@ class TestEmailVerificationRepository:
         orm_user: UserORMModel,
     ) -> None:
         verification = EmailVerification(
-            id=uuid4(),
+            id=uuid7(),
             user_id=orm_user.id,
             token_hash='used_hash',
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
@@ -173,7 +173,7 @@ class TestEmailVerificationRepository:
         orm_user: UserORMModel,
     ) -> None:
         verification = EmailVerification(
-            id=uuid4(),
+            id=uuid7(),
             user_id=orm_user.id,
             token_hash='delete_hash',
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),

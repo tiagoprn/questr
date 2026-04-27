@@ -6,7 +6,6 @@ from questr.users.domain import (
     generate_verification_token,
     normalize_username,
     validate_password,
-    verify_token_hash,
 )
 
 
@@ -85,11 +84,3 @@ class TestGenerateVerificationToken:
         raw_token, token_hash = generate_verification_token()
         expected = hashlib.sha256(raw_token.encode()).hexdigest()
         assert token_hash == expected
-
-
-class TestVerifyTokenHash:
-    def test_matching_hashes(self) -> None:
-        assert verify_token_hash('abc123', 'abc123') is True
-
-    def test_non_matching_hashes(self) -> None:
-        assert verify_token_hash('abc123', 'xyz789') is False

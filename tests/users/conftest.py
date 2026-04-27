@@ -1,12 +1,13 @@
-import asyncio
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
@@ -20,17 +21,9 @@ from questr.users.dependencies import get_rate_limiter
 
 
 @pytest.fixture(scope='session')
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
-@pytest.fixture(scope='session')
 def postgres_container() -> Generator[str, None, None]:
     with PostgresContainer('postgres:18-alpine') as postgres:
-        url = postgres.get_connection_url(driver=None)
-        yield f'postgresql+psycopg://{url.split("://")[1]}'
+        yield postgres.get_connection_url(driver='psycopg')
 
 
 @pytest.fixture(scope='session')
@@ -42,7 +35,7 @@ def redis_url() -> Generator[str, None, None]:
 @pytest_asyncio.fixture(scope='session')
 async def db_engine(
     postgres_container: str,
-) -> AsyncGenerator[Any, None]:
+) -> AsyncGenerator[AsyncEngine, None]:
     engine = create_async_engine(postgres_container, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -54,7 +47,7 @@ async def db_engine(
 
 @pytest_asyncio.fixture(scope='session')
 async def db_session_maker(
-    db_engine: Any,
+    db_engine: AsyncEngine,
 ) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(db_engine, expire_on_commit=False)
 
@@ -76,10 +69,10 @@ def _make_mock_rate_limiter() -> Any:
 
 
 @pytest_asyncio.fixture
-async def client(
+async def app(
     db_session: AsyncSession,
-) -> AsyncGenerator[AsyncClient, None]:
-    app = create_app()
+) -> FastAPI:
+    application = create_app()
 
     async def override_get_session() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
@@ -87,9 +80,19 @@ async def client(
     async def override_get_rate_limiter() -> Any:
         return _make_mock_rate_limiter()
 
-    app.dependency_overrides[get_async_session] = override_get_session
-    app.dependency_overrides[get_rate_limiter] = override_get_rate_limiter
+    application.dependency_overrides[get_async_session] = (
+        override_get_session
+    )
+    application.dependency_overrides[get_rate_limiter] = (
+        override_get_rate_limiter
+    )
+    return application
 
+
+@pytest_asyncio.fixture
+async def client(
+    app: FastAPI,
+) -> AsyncGenerator[AsyncClient, None]:
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url='http://test',

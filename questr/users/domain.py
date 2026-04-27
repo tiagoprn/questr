@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import re
 import secrets
 import unicodedata
@@ -57,10 +56,6 @@ def generate_verification_token() -> tuple[str, str]:
 
 def get_token_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(hours=24)
-
-
-def verify_token_hash(expected_hash: str, provided_hash: str) -> bool:
-    return hmac.compare_digest(expected_hash, provided_hash)
 
 
 @dataclass

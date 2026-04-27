@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from alembic import context
 
 from questr.orm.base import Base
+from questr.orm import models  # noqa: F401 — registers tables with Base.metadata
+from questr.settings import settings
 
 target_metadata = Base.metadata
 
@@ -17,7 +19,7 @@ if config.config_file_name is not None:
 
 
 def get_url() -> str:
-    return config.get_main_option('sqlalchemy.url')
+    return settings.DATABASE_URL
 
 
 def run_migrations_offline() -> None:
