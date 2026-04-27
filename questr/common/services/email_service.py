@@ -1,5 +1,8 @@
 import logging
 from abc import ABC, abstractmethod
+from email.message import EmailMessage
+
+import aiosmtplib
 
 from questr.settings import settings
 
@@ -35,9 +38,6 @@ class SmtpEmailService(BaseEmailService):
     async def send_verification_email(
         self, to_email: str, token: str
     ) -> bool:
-        import aiosmtplib
-        from email.message import EmailMessage
-
         verification_url = (
             f'POST /api/v1/auth/verify-email '
             f"with body: {{'token': '{token}'}}"

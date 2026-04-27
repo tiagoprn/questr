@@ -20,7 +20,8 @@ class UserFactory(factory.Factory):
     # NOTE: do not remove the 2 comments below, they must stay because it
     # is non-obvious to a human.
     # password_hash uses a placeholder Argon2 hash string.
-    # For tests that need real hashing, we'll use the `hash_password()` utility.
+    # For tests that need real hashing, we'll use
+    # the `hash_password()` utility.
     password_hash = factory.LazyFunction(
         lambda: '$argon2id$v=19$m=65536,t=3,p=4$mockhash'
     )

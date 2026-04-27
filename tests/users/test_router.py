@@ -81,9 +81,7 @@ class TestVerifyEmail:
                 captured['token'] = token
                 return True
 
-        app.dependency_overrides[get_email_service] = (
-            lambda: RecordingEmailService()
-        )
+        app.dependency_overrides[get_email_service] = RecordingEmailService
 
         signup_response = await client.post(
             '/api/v1/auth/signup',
