@@ -44,7 +44,9 @@ quote-style = 'single'
 - Use `factory-boy` to create model instances in tests (use `LazyAttribute` for derived fields).
 - Use `freezegun` to control time-dependent behavior in tests.
 - Set fixture scope deliberately: `scope='session'` for the DB engine, `scope='function'` for individual sessions.
-- The test paths must replicate the modules paths they're in, which is a common practice in python. E.g.: tests for code that is in `questr/questr/hello/router.py` must be in `questr/tests/hello/test_router.py`.
+- The test paths must replicate the source module paths. E.g.: tests for code in `questr/domains/users/service.py` must be in `tests/domains/users/test_service.py`.
+- Test file names describe **what** they test, not **which source file** they import from. A test named `test_router.py` may import from `api.py` — the name signals the layer being tested (HTTP endpoints), not the importing target.
+- Behavior tests live in `tests/behavior/` — see [ARCHITECTURE.md](./ARCHITECTURE.md#7-testing-philosophy) for the minimum testing requirement.
 
 ## Docker
 - Use `docker compose` for local development and deployment.
