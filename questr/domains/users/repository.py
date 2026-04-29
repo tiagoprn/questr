@@ -1,12 +1,39 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from questr.common.enums import UserStatus
-from questr.orm.models import EmailVerificationORMModel, UserORMModel
-from questr.users.domain import EmailVerification, User
+from questr.common.enums import UserRole, UserStatus
+from questr.infrastructure.orm.models import EmailVerificationORMModel, UserORMModel
+
+
+@dataclass
+class User:
+    """User domain object."""
+
+    id: UUID | None = None
+    username: str = ''
+    email: str = ''
+    first_name: str = ''
+    last_name: str = ''
+    password_hash: str = ''
+    role: UserRole = UserRole.USER
+    status: UserStatus = UserStatus.PENDING
+
+
+@dataclass
+class EmailVerification:
+    """Email verification domain object."""
+
+    id: UUID | None = None
+    user_id: UUID | None = None
+    token_hash: str = ''
+    expires_at: datetime | None = None
+    used_at: datetime | None = None
 
 
 class UserRepository:

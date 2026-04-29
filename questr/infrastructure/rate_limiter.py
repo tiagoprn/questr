@@ -2,6 +2,18 @@ import time
 
 from redis.asyncio import Redis
 
+from questr.infrastructure.redis import get_redis
+from questr.settings import settings
+
+
+async def get_rate_limiter() -> 'RedisRateLimiter':
+    redis = get_redis()
+    return RedisRateLimiter(
+        redis=redis,
+        max_requests=settings.RATE_LIMIT_RESEND_MAX,
+        window_seconds=settings.RATE_LIMIT_RESEND_WINDOW_HOURS * 3600,
+    )
+
 
 class RedisRateLimiter:
     """Rate limiter using Redis sorted sets with sliding window."""

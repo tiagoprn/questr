@@ -6,7 +6,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from questr.common.enums import UserRole, UserStatus
-from questr.orm.base import Base
+from questr.infrastructure.orm.base import Base
 
 
 class UserORMModel(Base):

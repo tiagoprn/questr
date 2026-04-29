@@ -16,12 +16,12 @@ from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
 
 from questr.factory import create_app
-from questr.orm.base import Base, get_async_session
-from questr.users.dependencies import get_rate_limiter
+from questr.infrastructure.orm.base import Base, get_async_session
+from questr.infrastructure.rate_limiter import get_rate_limiter
 
 
 @pytest.fixture(scope='session')
-def postgres_container() -> Generator[str, None, None]:
+def postgres_url() -> Generator[str, None, None]:
     with PostgresContainer('postgres:18-alpine') as postgres:
         yield postgres.get_connection_url(driver='psycopg')
 
@@ -34,9 +34,9 @@ def redis_url() -> Generator[str, None, None]:
 
 @pytest_asyncio.fixture(scope='session')
 async def db_engine(
-    postgres_container: str,
+    postgres_url: str,
 ) -> AsyncGenerator[AsyncEngine, None]:
-    engine = create_async_engine(postgres_container, echo=False)
+    engine = create_async_engine(postgres_url, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield engine

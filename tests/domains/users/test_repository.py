@@ -7,10 +7,10 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from questr.common.enums import UserRole, UserStatus
-from questr.orm.models import UserORMModel
-from questr.users.domain import EmailVerification, User
-from questr.users.repository import EmailVerificationRepository, UserRepository
-from tests.users.factories import UserFactory
+from questr.infrastructure.orm.models import UserORMModel
+from questr.domains.users.service import EmailVerification, User
+from questr.domains.users.repository import EmailVerificationRepository, UserRepository
+from tests.domains.users.factories import UserFactory
 
 
 class TestUserRepository:

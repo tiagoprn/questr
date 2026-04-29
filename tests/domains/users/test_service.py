@@ -12,8 +12,7 @@ from questr.common.exceptions import (
     RateLimitExceededError,
     UserAlreadyExistsError,
 )
-from questr.users.domain import EmailVerification, User
-from questr.users.service import AuthService
+from questr.domains.users.service import AuthService, EmailVerification, User
 
 
 @pytest.fixture

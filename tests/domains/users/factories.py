@@ -5,7 +5,7 @@ import factory
 from factory.faker import Faker
 
 from questr.common.enums import UserRole, UserStatus
-from questr.orm.models import EmailVerificationORMModel, UserORMModel
+from questr.infrastructure.orm.models import EmailVerificationORMModel, UserORMModel
 
 
 class UserFactory(factory.Factory):

@@ -16,3 +16,8 @@ def get_greeting() -> str:
         return 'Good afternoon!'
     else:
         return 'Good evening!'
+
+
+class HelloService:
+    def get_greeting(self) -> str:  # noqa: PLR6301
+        return get_greeting()

@@ -2,7 +2,7 @@
 import hashlib
 
 # noqa: PLR6301,PLR2004
-from questr.users.domain import (
+from questr.domains.users.service import (
     generate_verification_token,
     normalize_username,
     validate_password,

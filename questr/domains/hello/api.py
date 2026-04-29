@@ -1,9 +1,15 @@
 from fastapi import APIRouter
+from pydantic import BaseModel
 
-from questr.hello.schemas import HelloResponse
-from questr.hello.service import HelloService
+from questr.domains.hello.service import HelloService
 
 router = APIRouter(prefix='/hello', tags=['hello'])
+
+
+class HelloResponse(BaseModel):
+    message: str
+
+    model_config = {'from_attributes': True}
 
 
 @router.get('', response_model=HelloResponse)

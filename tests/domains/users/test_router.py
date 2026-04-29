@@ -6,11 +6,11 @@ import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
 
-from questr.common.services.email_service import (
+from questr.infrastructure.email import (
     BaseEmailService,
     get_email_service,
 )
-from questr.users.dependencies import get_rate_limiter
+from questr.infrastructure.rate_limiter import get_rate_limiter
 
 
 class TestSignup:
