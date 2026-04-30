@@ -6,12 +6,23 @@ class Settings(BaseSettings):
 
     APP_NAME: str = 'questr'
     DEBUG: bool = False
-    DATABASE_URL: str = (
-        'postgresql+psycopg://app_user:app_password'
-        '@questr_database:5432/app_db'
-    )
+    POSTGRES_USER: str = 'questr'
+    POSTGRES_PASSWORD: str = 'qB2xSEEJ-Q.UI3'
+    POSTGRES_DB: str = 'questr_db'
+    POSTGRES_HOST: str = '127.0.0.1'
+    REDIS_HOST: str = '127.0.0.1'
 
-    REDIS_URL: str = 'redis://localhost:6379/0'
+    @property
+    def DATABASE_URL(self) -> str:
+        return (
+            f'postgresql+psycopg://{self.POSTGRES_USER}'
+            f':{self.POSTGRES_PASSWORD}'
+            f'@{self.POSTGRES_HOST}:5432/{self.POSTGRES_DB}'
+        )
+
+    @property
+    def REDIS_URL(self) -> str:
+        return f'redis://{self.REDIS_HOST}:6379/0'
 
     EMAIL_ENABLED: bool = False
     SMTP_HOST: str = 'localhost'

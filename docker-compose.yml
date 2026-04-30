@@ -10,6 +10,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ}
     restart: unless-stopped
     volumes:
       - "./db_data/postgresql:/var/lib/postgresql"
@@ -25,6 +26,8 @@ services:
     container_name: "questr_redis"
     ports:
       - "6379:6379"
+    environment:
+      TZ: ${TZ}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -43,3 +46,4 @@ services:
     restart: unless-stopped
     environment:
       MP_SMTP_AUTH_IGNORE_TLS: ${MP_SMTP_AUTH_IGNORE_TLS}
+      TZ: ${TZ}

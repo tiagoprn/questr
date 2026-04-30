@@ -3,6 +3,21 @@ SHELL := /bin/bash
 PROJECT_NAME = questr
 PYTHON_VERSION = 3.14
 
+# The .env file is sourced globally at the beginning of the Makefile.
+# This ensures environment variables like POSTGRES_USER, POSTGRES_DB, POSTGRES_PASSWORD
+# are available in the Makefile's execution environment.
+ifndef ENV_SOURCED
+    ifneq ($(wildcard .env),)
+        include .env
+        ENV_SOURCED := true
+    else
+        $(error .env not found. Please create it.)
+    endif
+endif
+
+# Internal guard check to prevent direct execution of private targets
+GUARD_CHECK = @if [ -z "$(_GUARD)" ]; then echo "Error: Internal target '$@' cannot be invoked directly."; exit 1; fi
+
 help:  ## This help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort
 
@@ -89,7 +104,7 @@ db-downgrade:  ## Rollback last migration
 clean-postgres-data:
 	$(GUARD_CHECK)
 	@echo "Stopping and removing containers..."
-	@set -a && source .env && set +a && docker compose down --volumes # This stops and removes containers THEN removes volumes.
+	@docker compose down --volumes # This stops and removes containers THEN removes volumes.
 	@echo "Removing PostgreSQL data directory: ./db_data/postgresql..."
 	@sudo rm -rf ./db_data/postgresql/* # Use sudo for permissions, target only contents. Ensure this path is correct.
 	@echo "PostgreSQL data directory cleaned."
@@ -101,8 +116,6 @@ start-db-only:
 	@echo "Starting only the PostgreSQL container..."
 	# Log the environment variables that should be set before docker compose up
 	@echo "Makefile env check: POSTGRES_USER='${POSTGRES_USER}', POSTGRES_DB='${POSTGRES_DB}', POSTGRES_PASSWORD='${POSTGRES_PASSWORD}'"
-	# Export environment variables from .env to ensure they are available to the docker compose command.
-	@set -a && source .env && set +a && \
 	docker compose -p $(shell basename $(PWD)) \
 		-f docker-compose.yml \
 		up -d db
