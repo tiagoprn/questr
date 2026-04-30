@@ -34,3 +34,6 @@ Thumbs.db
 tmp/
 
 TODO.md
+# containers
+db_data/
+backups/

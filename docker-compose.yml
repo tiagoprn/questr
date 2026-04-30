@@ -1,22 +1,31 @@
 services:
   questr_database:
     image: postgres:18-alpine
-    environment:
-      POSTGRES_USER: app_user
-      POSTGRES_PASSWORD: app_password
-      POSTGRES_DB: app_db
+    container_name: "questr_postgres"
     ports:
       - "5432:5432"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    restart: unless-stopped
+    volumes:
+      - "./db_data/postgresql:/var/lib/postgresql"
+      - "./backups:/backups"  # Map a 'backups' directory from the host to /backups in the container
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app_user -d app_db"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} || exit 1"]
+      interval: 30s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
+    container_name: "questr_redis"
     ports:
       - "6379:6379"
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -25,8 +34,12 @@ services:
 
   mailpit:
     image: axllent/mailpit:latest
+    container_name: "questr_mailpit"
     ports:
       - "1025:1025"
       - "8025:8025"
+    env_file:
+      - .env
+    restart: unless-stopped
     environment:
-      MP_SMTP_AUTH_IGNORE_TLS: "true"
+      MP_SMTP_AUTH_IGNORE_TLS: ${MP_SMTP_AUTH_IGNORE_TLS}

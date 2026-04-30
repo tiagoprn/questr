@@ -85,3 +85,48 @@ db-upgrade:  ## Apply all pending migrations
 
 db-downgrade:  ## Rollback last migration
 	@alembic downgrade -1
+
+clean-postgres-data:
+	$(GUARD_CHECK)
+	@echo "Stopping and removing containers..."
+	@set -a && source .env && set +a && docker compose down --volumes # This stops and removes containers THEN removes volumes.
+	@echo "Removing PostgreSQL data directory: ./db_data/postgresql..."
+	@sudo rm -rf ./db_data/postgresql/* # Use sudo for permissions, target only contents. Ensure this path is correct.
+	@echo "PostgreSQL data directory cleaned."
+
+live-restore: clean-postgres-data start-db-only restore-db-after-start  ## Perform live db restore from a given db dump file, auto-starting the containers after finished. Usage: make live-restore FILE=./backups/file.dump
+
+start-db-only:
+	$(GUARD_CHECK)
+	@echo "Starting only the PostgreSQL container..."
+	# Log the environment variables that should be set before docker compose up
+	@echo "Makefile env check: POSTGRES_USER='${POSTGRES_USER}', POSTGRES_DB='${POSTGRES_DB}', POSTGRES_PASSWORD='${POSTGRES_PASSWORD}'"
+	# Export environment variables from .env to ensure they are available to the docker compose command.
+	@set -a && source .env && set +a && \
+	docker compose -p $(shell basename $(PWD)) \
+		-f docker-compose.yml \
+		up -d db
+	@echo "Giving PostgreSQL a moment to initialize and become ready..."
+	@sleep 10 # Give it some time to initialize and pass its internal checks.
+	@echo "PostgreSQL container started. Proceeding."
+
+restore-db-after-start:
+	$(GUARD_CHECK)
+	@echo "Running database restore script after DB is up..."
+	@if [ -z "$(FILE)" ]; then \
+		echo "Error: No FILE specified."; \
+		echo "Usage: make live-restore FILE=./backups/my_backup.dump"; \
+		exit 1; \
+	fi
+	@./scripts/pg_restore.sh "$(FILE)"
+
+dump-db:  ## Perform a database backup using pg_dump
+	@echo "Running database dump script..."
+	@./scripts/pg_dump.sh
+
+pgcli:  ## Starts pgcli (requires it installed with uv tool)
+	@echo "Starting pgcli..."
+	@./scripts/pg_cli.sh
+
+fix-permissions:  ## Make the scripts executable
+	chmod +x scripts/*.sh
