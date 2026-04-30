@@ -56,3 +56,4 @@ quote-style = 'single'
 ## etc
 
 - Whenever UUID is required, use v7. That applies to the whole codebase where an UUID is needed, not exclusively for the database.
+- After you finish writing all changes on a python file, run `make lint-autofix && make style-autofix` so that the code is also ready for the CI later on.
