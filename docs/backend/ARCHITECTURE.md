@@ -49,8 +49,8 @@ Inside each domain, start with exactly three files:
 ```
 domains/users/
     api.py        # HTTP handlers, Pydantic schemas, FastAPI DI wiring
-    service.py    # Domain objects (dataclasses) + business logic + use cases
-    repository.py # Persistence (ORM queries, _to_domain mapping)
+    service.py    # Domain functions + business logic + use cases
+    repository.py # Domain dataclasses + persistence (ORM queries, _to_domain mapping)
 ```
 
 ### Responsibilities
@@ -58,8 +58,18 @@ domains/users/
 | File | Contains | Is allowed to import |
 |---|---|---|
 | `api.py` | `APIRouter` routes, Pydantic request/response models, `Depends()` providers, type aliases (`T_AuthService`) | `service.py`, `repository.py`, `infrastructure/`, `app/dependencies.py` |
-| `service.py` | Domain dataclasses, pure domain functions, service/use case classes | `repository.py`, `common/`, `infrastructure/` |
+| `service.py` | Pure domain functions, business logic, service/use case classes | `repository.py`, `common/`, `infrastructure/` |
 | `repository.py` | Domain dataclasses, repository classes with `_to_domain()` mappers | `infrastructure/orm/`, `common/` |
+
+### Why Domain Dataclasses Live in `repository.py`
+
+Domain dataclasses (`User`, `EmailVerification`) are defined in `repository.py` rather than `service.py` for two reasons:
+
+1. **Co-location with mapping logic.** The `_to_domain()` method that converts ORM models to domain objects lives in the same file as the domain dataclass it produces. The dataclass and its mapper change together — separating them would couple two files that are logically one unit.
+
+2. **The persistence boundary defines the contract.** The repository is where infrastructure (`infrastructure/orm/models.py`) meets domain code. Defining the domain dataclass at this boundary makes the mapping contract explicit: `service.py` imports `User` from `repository.py`, not from `infrastructure/orm/models.py`, which would violate QTR001.
+
+`service.py` imports domain dataclasses from `repository.py`, which is allowed by the dependency direction below. This keeps the three-file structure intact without adding a fourth file.
 
 ### Dependency Direction
 
