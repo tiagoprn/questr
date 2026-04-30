@@ -1,6 +1,7 @@
 """Behavior tests for the hello endpoint — parametrized time-of-day."""
 
 import pytest
+from fastapi import status
 from freezegun import freeze_time
 from httpx import AsyncClient
 
@@ -20,5 +21,5 @@ async def test_hello_with_time(
     """Hello endpoint returns the correct greeting based on UTC hour."""
     with freeze_time(time):
         response = await client.get('/api/hello')
-        assert response.status_code == 200
+        assert response.status_code == status.HTTP_200_OK
         assert response.json() == {'message': expected_greeting}

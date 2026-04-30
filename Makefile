@@ -47,6 +47,18 @@ style-autofix:  ## Run ruff to format code
 	@echo 'running ruff format...'
 	@ruff format questr/ tests/
 
+architecture-lint:  ## Run custom architecture lint rules
+	@printf '\n --- \n >>> Running architecture lint...<<<\n'
+	@uv run python scripts/lint_custom.py
+	@printf '\n FINISHED! \n --- \n'
+
+ci:  ## Run full CI pipeline (style + lint + architecture-lint)
+	@printf '\n --- \n >>> Running CI pipeline...<<<\n'
+	@$(MAKE) style
+	@$(MAKE) lint
+	@$(MAKE) architecture-lint
+	@printf '\n CI PIPELINE FINISHED! \n --- \n'
+
 test:  ## Run the test suite
 	@uv run pytest -v
 

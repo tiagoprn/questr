@@ -1,6 +1,7 @@
 """Behavior tests for user signup — happy path through HTTP boundary."""
 
 import pytest
+from fastapi import status
 from httpx import AsyncClient
 
 
@@ -19,7 +20,7 @@ class TestUserSignup:
                 'password_confirmation': 'StrongPass1!',
             },
         )
-        assert response.status_code == 201
+        assert response.status_code == status.HTTP_201_CREATED
         data = response.json()
         assert data['username'] == 'newuser'
         assert data['email'] == 'newuser@example.com'
@@ -39,5 +40,5 @@ class TestUserSignup:
         }
         await client.post('/api/v1/auth/signup', json=payload)
         response = await client.post('/api/v1/auth/signup', json=payload)
-        assert response.status_code == 409
+        assert response.status_code == status.HTTP_409_CONFLICT
         assert 'already exists' in response.json()['detail']
