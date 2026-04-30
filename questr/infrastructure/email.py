@@ -11,9 +11,7 @@ logger = logging.getLogger(__name__)
 
 class BaseEmailService(ABC):
     @abstractmethod
-    async def send_verification_email(
-        self, to_email: str, token: str
-    ) -> bool:
+    async def send_verification_email(self, to_email: str, token: str) -> bool:
         """Send verification email. Returns True on success."""
         ...
 
@@ -35,12 +33,9 @@ class SmtpEmailService(BaseEmailService):
         self.password = password
         self.from_email = from_email
 
-    async def send_verification_email(
-        self, to_email: str, token: str
-    ) -> bool:
+    async def send_verification_email(self, to_email: str, token: str) -> bool:
         verification_url = (
-            f'POST /api/v1/auth/verify-email '
-            f"with body: {{'token': '{token}'}}"
+            f"POST /api/v1/auth/verify-email with body: {{'token': '{token}'}}"
         )
 
         message = EmailMessage()

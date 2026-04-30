@@ -2,8 +2,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from questr.infrastructure.redis import close_redis
 from questr.infrastructure.orm.base import engine
+from questr.infrastructure.redis import close_redis
 
 
 @asynccontextmanager

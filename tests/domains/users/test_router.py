@@ -126,9 +126,7 @@ class TestResendVerification:
     ) -> None:
         denying_limiter = MagicMock()
         denying_limiter.is_allowed = AsyncMock(return_value=False)
-        app.dependency_overrides[get_rate_limiter] = (
-            lambda: denying_limiter
-        )
+        app.dependency_overrides[get_rate_limiter] = lambda: denying_limiter
 
         response = await client.post(
             '/api/v1/auth/resend-verification',

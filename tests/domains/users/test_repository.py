@@ -7,9 +7,12 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from questr.common.enums import UserRole, UserStatus
-from questr.infrastructure.orm.models import UserORMModel
+from questr.domains.users.repository import (
+    EmailVerificationRepository,
+    UserRepository,
+)
 from questr.domains.users.service import EmailVerification, User
-from questr.domains.users.repository import EmailVerificationRepository, UserRepository
+from questr.infrastructure.orm.models import UserORMModel
 from tests.domains.users.factories import UserFactory
 
 
@@ -79,9 +82,7 @@ class TestUserRepository:
         db_session: AsyncSession,
     ) -> None:
         repo, created = created_user
-        updated = await repo.update_status(
-            created.id, UserStatus.ACTIVE
-        )
+        updated = await repo.update_status(created.id, UserStatus.ACTIVE)
         await db_session.flush()
         assert updated is not None
         assert updated.status == UserStatus.ACTIVE
@@ -95,9 +96,7 @@ class TestEmailVerificationRepository:
         return EmailVerificationRepository(db_session)
 
     @pytest_asyncio.fixture
-    async def orm_user(
-        self, db_session: AsyncSession
-    ) -> UserORMModel:
+    async def orm_user(self, db_session: AsyncSession) -> UserORMModel:
         user = UserFactory()
         db_session.add(user)
         await db_session.flush()

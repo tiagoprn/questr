@@ -2,9 +2,7 @@
 
 import pytest
 from freezegun import freeze_time
-from httpx import ASGITransport, AsyncClient
-
-from questr.factory import create_app
+from httpx import AsyncClient
 
 
 @pytest.mark.parametrize(
@@ -16,15 +14,11 @@ from questr.factory import create_app
         ('2024-01-01 20:00:00', 'Good evening!'),
     ],
 )
-async def test_hello_with_time(time: str, expected_greeting: str) -> None:
+async def test_hello_with_time(
+    time: str, expected_greeting: str, client: AsyncClient
+) -> None:
     """Hello endpoint returns the correct greeting based on UTC hour."""
     with freeze_time(time):
-        app = create_app()
-        transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport,
-            base_url='http://test',
-        ) as client:
-            response = await client.get('/api/hello')
-            assert response.status_code == 200
-            assert response.json() == {'message': expected_greeting}
+        response = await client.get('/api/hello')
+        assert response.status_code == 200
+        assert response.json() == {'message': expected_greeting}

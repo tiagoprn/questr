@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from questr.domains.hello.service import HelloService
+from questr.domains.hello.service import get_greeting
 
 router = APIRouter(prefix='/hello', tags=['hello'])
 
@@ -14,5 +14,4 @@ class HelloResponse(BaseModel):
 
 @router.get('', response_model=HelloResponse)
 async def hello() -> HelloResponse:
-    service = HelloService()
-    return HelloResponse(message=service.get_greeting())
+    return HelloResponse(message=get_greeting())

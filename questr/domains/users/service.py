@@ -17,14 +17,14 @@ from questr.common.exceptions import (
     RateLimitExceededError,
     UserAlreadyExistsError,
 )
-from questr.infrastructure.email import BaseEmailService
-from questr.infrastructure.rate_limiter import RedisRateLimiter
 from questr.domains.users.repository import (
     EmailVerification,
     EmailVerificationRepository,
     User,
     UserRepository,
 )
+from questr.infrastructure.email import BaseEmailService
+from questr.infrastructure.rate_limiter import RedisRateLimiter
 
 pwd_context = PasswordHash(hashers=[Argon2Hasher()])
 
@@ -36,7 +36,8 @@ def normalize_username(username: str) -> str:
     username = username.strip()
     username = username.lower()
     username = (
-        unicodedata.normalize('NFKD', username)
+        unicodedata
+        .normalize('NFKD', username)
         .encode('ascii', 'ignore')
         .decode('ascii')
     )
@@ -66,13 +67,9 @@ def validate_password(password: str) -> PasswordValidationResult:
     if len(password) < 8:  # noqa: PLR2004
         errors.append('Password must be at least 8 characters')
     if not re.search(r'[A-Z]', password):
-        errors.append(
-            'Password must contain at least 1 uppercase letter'
-        )
+        errors.append('Password must contain at least 1 uppercase letter')
     if not re.search(r'[a-z]', password):
-        errors.append(
-            'Password must contain at least 1 lowercase letter'
-        )
+        errors.append('Password must contain at least 1 lowercase letter')
     if not re.search(r'\d', password):
         errors.append('Password must contain at least 1 number')
     if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
@@ -81,9 +78,7 @@ def validate_password(password: str) -> PasswordValidationResult:
             '(!@#$%^&*(),.?":{}|<>)'
         )
 
-    return PasswordValidationResult(
-        is_valid=len(errors) == 0, errors=errors
-    )
+    return PasswordValidationResult(is_valid=len(errors) == 0, errors=errors)
 
 
 # ── Application services ──────────────────────────────────────────────
@@ -131,9 +126,7 @@ class AuthService:
 
         existing = await self.user_repo.get_by_username(normalized_username)
         if existing:
-            raise UserAlreadyExistsError(
-                'Username already exists'
-            )
+            raise UserAlreadyExistsError('Username already exists')
         existing = await self.user_repo.get_by_email(email)
         if existing:
             raise UserAlreadyExistsError('Email already exists')
@@ -160,9 +153,7 @@ class AuthService:
         )
         await self.verification_repo.create(verification)
 
-        await self.email_service.send_verification_email(
-            email, raw_token
-        )
+        await self.email_service.send_verification_email(email, raw_token)
 
         return created_user
 
@@ -199,15 +190,10 @@ class AuthService:
 
         return user
 
-    async def resend_verification(
-        self, email: str, client_ip: str
-    ) -> bool:
-        if not await self.rate_limiter.is_allowed(
-            f'resend:{client_ip}'
-        ):
+    async def resend_verification(self, email: str, client_ip: str) -> bool:
+        if not await self.rate_limiter.is_allowed(f'resend:{client_ip}'):
             raise RateLimitExceededError(
-                'Too many verification requests. '
-                'Please try again later.'
+                'Too many verification requests. Please try again later.'
             )
 
         user = await self.user_repo.get_by_email(email)
@@ -226,8 +212,6 @@ class AuthService:
         )
         await self.verification_repo.create(verification)
 
-        await self.email_service.send_verification_email(
-            email, raw_token
-        )
+        await self.email_service.send_verification_email(email, raw_token)
 
         return True

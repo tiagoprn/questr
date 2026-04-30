@@ -2,8 +2,6 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
-from questr.infrastructure.rate_limiter import RedisRateLimiter
-
 
 def get_client_ip(request: Request) -> str:
     forwarded = request.headers.get('X-Forwarded-For')

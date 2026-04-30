@@ -5,8 +5,13 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from questr.app.dependencies import T_ClientIP, get_client_ip
+from questr.app.dependencies import T_ClientIP
 from questr.common.enums import UserRole, UserStatus
+from questr.domains.users.repository import (
+    EmailVerificationRepository,
+    UserRepository,
+)
+from questr.domains.users.service import AuthService
 from questr.infrastructure.email import (
     BaseEmailService,
     get_email_service,
@@ -16,11 +21,6 @@ from questr.infrastructure.rate_limiter import (
     RedisRateLimiter,
     get_rate_limiter,
 )
-from questr.domains.users.repository import (
-    EmailVerificationRepository,
-    UserRepository,
-)
-from questr.domains.users.service import AuthService
 
 router = APIRouter(prefix='/v1/auth', tags=['auth'])
 
@@ -90,19 +90,13 @@ async def get_verification_repository(
 
 
 async def get_auth_service(
-    user_repo: Annotated[
-        UserRepository, Depends(get_user_repository)
-    ],
+    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
     verification_repo: Annotated[
         EmailVerificationRepository,
         Depends(get_verification_repository),
     ],
-    email_service: Annotated[
-        BaseEmailService, Depends(get_email_service)
-    ],
-    rate_limiter: Annotated[
-        RedisRateLimiter, Depends(get_rate_limiter)
-    ],
+    email_service: Annotated[BaseEmailService, Depends(get_email_service)],
+    rate_limiter: Annotated[RedisRateLimiter, Depends(get_rate_limiter)],
 ) -> AuthService:
     return AuthService(
         user_repo=user_repo,
@@ -112,9 +106,7 @@ async def get_auth_service(
     )
 
 
-T_UserRepo = Annotated[
-    UserRepository, Depends(get_user_repository)
-]
+T_UserRepo = Annotated[UserRepository, Depends(get_user_repository)]
 T_VerificationRepo = Annotated[
     EmailVerificationRepository,
     Depends(get_verification_repository),
@@ -178,9 +170,7 @@ async def resend_verification(
     service: T_AuthService,
     client_ip: T_ClientIP,
 ) -> ResendVerificationResponse:
-    await service.resend_verification(
-        email=payload.email, client_ip=client_ip
-    )
+    await service.resend_verification(email=payload.email, client_ip=client_ip)
     return ResendVerificationResponse(
         message='If an account with this email exists, '
         'a new verification email has been sent.'

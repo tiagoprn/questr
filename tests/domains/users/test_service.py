@@ -197,9 +197,7 @@ class TestVerifyEmail:
                 id=uuid7(),
                 user_id=user_id,
                 token_hash='valid_hash',
-                expires_at=(
-                    datetime.now(timezone.utc) + timedelta(hours=24)
-                ),
+                expires_at=(datetime.now(timezone.utc) + timedelta(hours=24)),
             )
         )
         mock_verification_repo.mark_as_used.return_value = True
@@ -239,9 +237,7 @@ class TestVerifyEmail:
                 id=uuid7(),
                 user_id=uuid7(),
                 token_hash='used_hash',
-                expires_at=(
-                    datetime.now(timezone.utc) + timedelta(hours=24)
-                ),
+                expires_at=(datetime.now(timezone.utc) + timedelta(hours=24)),
                 used_at=datetime.now(timezone.utc),
             )
         )
@@ -260,9 +256,7 @@ class TestVerifyEmail:
                 id=uuid7(),
                 user_id=uuid7(),
                 token_hash='expired_hash',
-                expires_at=(
-                    datetime.now(timezone.utc) - timedelta(hours=1)
-                ),
+                expires_at=(datetime.now(timezone.utc) - timedelta(hours=1)),
             )
         )
 

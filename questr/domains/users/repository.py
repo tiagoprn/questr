@@ -4,11 +4,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from questr.common.enums import UserRole, UserStatus
-from questr.infrastructure.orm.models import EmailVerificationORMModel, UserORMModel
+from questr.infrastructure.orm.models import (
+    EmailVerificationORMModel,
+    UserORMModel,
+)
 
 
 @dataclass
@@ -64,18 +67,14 @@ class UserRepository:
 
     async def get_by_username(self, username: str) -> User | None:
         result = await self.session.execute(
-            select(UserORMModel).where(
-                UserORMModel.username == username
-            )
+            select(UserORMModel).where(UserORMModel.username == username)
         )
         orm_user = result.scalar_one_or_none()
         return self._to_domain(orm_user) if orm_user else None
 
     async def get_by_email(self, email: str) -> User | None:
         result = await self.session.execute(
-            select(UserORMModel).where(
-                UserORMModel.email == email
-            )
+            select(UserORMModel).where(UserORMModel.email == email)
         )
         orm_user = result.scalar_one_or_none()
         return self._to_domain(orm_user) if orm_user else None
@@ -151,16 +150,12 @@ class EmailVerificationRepository:
 
     async def delete_by_user_id(self, user_id: UUID) -> int:
         result = await self.session.execute(
-            select(EmailVerificationORMModel).where(
+            delete(EmailVerificationORMModel).where(
                 EmailVerificationORMModel.user_id == user_id
             )
         )
-        records = result.scalars().all()
-        count = len(records)
-        for record in records:
-            await self.session.delete(record)
         await self.session.flush()
-        return count
+        return result.rowcount
 
     @staticmethod
     def _to_domain(orm_v: EmailVerificationORMModel) -> EmailVerification:
