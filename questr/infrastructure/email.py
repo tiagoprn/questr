@@ -19,19 +19,21 @@ class BaseEmailService(ABC):
 class SmtpEmailService(BaseEmailService):
     """Email service using SMTP (e.g., Mailpit for local dev)."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913,PLR0917
         self,
         host: str,
         port: int,
         username: str,
         password: str,
         from_email: str,
+        use_starttls: bool = True,
     ) -> None:
         self.host = host
         self.port = port
         self.username = username
         self.password = password
         self.from_email = from_email
+        self.use_starttls = use_starttls
 
     async def send_verification_email(self, to_email: str, token: str) -> bool:
         verification_url = (
@@ -52,9 +54,9 @@ class SmtpEmailService(BaseEmailService):
                 message,
                 hostname=self.host,
                 port=self.port,
-                username=self.username,
-                password=self.password,
-                start_tls=True,
+                username=self.username or None,
+                password=self.password or None,
+                start_tls=self.use_starttls,
             )
             logger.info('Verification email sent to %s', to_email)
             return True
@@ -88,5 +90,6 @@ def get_email_service() -> BaseEmailService:
             username=settings.SMTP_USER,
             password=settings.SMTP_PASSWORD,
             from_email=settings.EMAIL_FROM,
+            use_starttls=settings.SMTP_USE_STARTTLS,
         )
     return ConsoleEmailService()

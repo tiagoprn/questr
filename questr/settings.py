@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 1025
     SMTP_USER: str = ''
     SMTP_PASSWORD: str = ''
+    SMTP_USE_STARTTLS: bool = True
     EMAIL_FROM: str = 'noreply@questr.app'
 
     RATE_LIMIT_RESEND_MAX: int = 3
