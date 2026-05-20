@@ -83,11 +83,16 @@ test-pattern:  ## Run tests matching a pattern. Usage: make test-pattern PATTERN
 test-coverage:  ## Run the test coverage report
 	@uv run pytest --cov=questr --cov-report=term-missing --cov-report=html
 
-docker-up:  ## Start docker containers
+docker-start:  ## Start docker containers
 	@docker compose up -d
 
-docker-down:  ## Stop docker containers
-	@docker compose down
+docker-stop:  ## Stop docker containers
+	@docker compose stop
+
+docker-rm-all: docker-stop  ## remove all docker containers, volumes, and host data
+	@docker compose down --volumes
+	@echo "Removing PostgreSQL host data directory..."
+	@sudo rm -rf ./ops/dev/infra/db/data/postgresql/*
 
 docker-logs:  ## Show docker logs
 	@docker compose logs -f
