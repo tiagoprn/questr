@@ -24,3 +24,4 @@ class Base(DeclarativeBase):
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session
+        await session.commit()

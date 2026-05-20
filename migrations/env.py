@@ -6,8 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from alembic import context
 
-from questr.orm.base import Base
-from questr.orm import models  # noqa: F401 — registers tables with Base.metadata
+from questr.infrastructure.orm.base import Base
+from questr.infrastructure.orm import models  # noqa: F401 — registers tables with Base.metadata
 from questr.settings import settings
 
 target_metadata = Base.metadata

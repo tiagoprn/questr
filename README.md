@@ -15,7 +15,6 @@ This is a full revamp of my original Questrya project, rebuilt from the ground u
 
 ### Backend
 
-
 | Tool | Technology |
 | :-- | :-- |
 | Language | Python 3.14 |
@@ -32,7 +31,38 @@ This is a full revamp of my original Questrya project, rebuilt from the ground u
 
 > Detailed docs coming soon.
 
-## Database Migrations
+## Documentation
+
+### Local development server
+
+- Activate the uv virtualenv:
+
+```bash
+
+source .venv/bin/activate
+
+```
+
+- Run the migrations:
+
+```bash
+
+make db-upgrade
+
+```
+
+- Raise the development server:
+
+```bash
+
+make dev-server
+
+```
+
+- Mailpit WebUI is available at: <http://kvm-labs:8025/>
+
+
+### Database Migrations
 
 This project uses Alembic for database migrations. Use these Makefile commands:
 
@@ -42,15 +72,13 @@ This project uses Alembic for database migrations. Use these Makefile commands:
 | `make db-upgrade` | Apply all pending migrations |
 | `make db-downgrade` | Rollback the last migration |
 
-### Workflow
+#### Workflow
 
 1. Modify ORM models in `questr/orm/models.py`
 2. Run `make db-create-migration MSG="Add users table"` to generate a migration
 3. Review the generated migration file
 4. Run `make db-upgrade` to apply it
 5. To rollback: `make db-downgrade`
-
-## Documentation
 
 ### API
 

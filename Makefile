@@ -41,7 +41,7 @@ install:  ## Install dependencies using uv
 	@uv lock
 	@echo "Installation complete!"
 
-dev:  ## Run development server
+dev-server:  ## Run development server
 	@uv run uvicorn questr.factory:create_app --reload --host 0.0.0.0 --port 8000
 
 lint:  ## Run ruff linter to enforce coding practices
