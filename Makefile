@@ -94,6 +94,10 @@ docker-rm-all: docker-stop  ## remove all docker containers, volumes, and host d
 	@echo "Removing PostgreSQL host data directory..."
 	@sudo rm -rf ./ops/dev/infra/db/data/postgresql/*
 
+docker-reset-all:  ## remove all docker containers, volumes, and host data, then start new fresh containers
+	@$(MAKE) docker-rm-all
+	@$(MAKE) docker-start
+
 docker-logs:  ## Show docker logs
 	@docker compose logs -f
 
