@@ -151,6 +151,69 @@ class TestSignup:
             )
 
     @pytest.mark.asyncio
+    async def test_plus_tag_emails_are_distinct(
+        self,
+        auth_service: AuthService,
+        mock_user_repo: MagicMock,
+    ) -> None:
+        """Two emails with same base but different + tags are distinct."""
+        # Arrange: first email exists
+        mock_user_repo.get_by_email.side_effect = [
+            None,  # first call: email1 not found
+            User(id=uuid7(), email='base+tag1@example.com'),  # found
+        ]
+        mock_user_repo.get_by_username.return_value = None
+        mock_user_repo.create.return_value = User(
+            id=uuid7(),
+            username='plususer1',
+            email='base+tag1@example.com',
+            first_name='Plus',
+            last_name='One',
+            password_hash='hashed',
+            role=UserRole.USER,
+            status=UserStatus.PENDING,
+        )
+
+        # Act: signup with tag1 succeeds
+        await auth_service.signup(
+            username='plususer1',
+            email='base+tag1@example.com',
+            first_name='Plus',
+            last_name='One',
+            password='StrongPass1!',
+            password_confirmation='StrongPass1!',
+            client_ip='127.0.0.1',
+        )
+
+        # Act: signup with tag2 should also succeed (distinct email)
+        mock_user_repo.get_by_email.side_effect = [
+            None,  # email2 not found
+            None,  # for good measure (get_by_username is mocked separately)
+        ]
+        mock_user_repo.get_by_username.return_value = None
+        mock_user_repo.create.return_value = User(
+            id=uuid7(),
+            username='plususer2',
+            email='base+tag2@example.com',
+            first_name='Plus',
+            last_name='Two',
+            password_hash='hashed',
+            role=UserRole.USER,
+            status=UserStatus.PENDING,
+        )
+
+        await auth_service.signup(
+            username='plususer2',
+            email='base+tag2@example.com',
+            first_name='Plus',
+            last_name='Two',
+            password='StrongPass1!',
+            password_confirmation='StrongPass1!',
+            client_ip='127.0.0.1',
+        )
+        # No exception means both registrations were distinct
+
+    @pytest.mark.asyncio
     async def test_raises_on_password_mismatch(
         self,
         auth_service: AuthService,

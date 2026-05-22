@@ -30,6 +30,9 @@ router = APIRouter(prefix='/v1/auth', tags=['auth'])
 
 class SignupRequest(BaseModel):
     username: str
+    # NOTE: Email with `+` tag (e.g., user+tag@domain) is stored as-is
+    # and treated as a distinct identity. `user+tag1@gmail.com` and
+    # `user+tag2@gmail.com` are different users.
     email: EmailStr
     first_name: str
     last_name: str
@@ -59,7 +62,7 @@ class VerifyEmailResponse(BaseModel):
 
 
 class ResendVerificationRequest(BaseModel):
-    email: EmailStr
+    email: EmailStr  # Exact match — full email including `+` tag
 
 
 class ResendVerificationResponse(BaseModel):

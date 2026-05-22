@@ -131,3 +131,31 @@ class TestResendVerification:
             json={'email': 'someone@example.com'},
         )
         assert response.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_resend_with_plus_email_succeeds(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        """Resend verification for a plus-addressed email returns 200."""
+        # Signup with a plus email
+        signup_resp = await client.post(
+            '/api/v1/auth/signup',
+            json={
+                'username': 'plusresend',
+                'email': 'plusresend+work@example.com',
+                'first_name': 'Plus',
+                'last_name': 'Resend',
+                'password': 'StrongPass1!',
+                'password_confirmation': 'StrongPass1!',
+            },
+        )
+        assert signup_resp.status_code == 201
+
+        # Resend with exact same plus email
+        resend_resp = await client.post(
+            '/api/v1/auth/resend-verification',
+            json={'email': 'plusresend+work@example.com'},
+        )
+        assert resend_resp.status_code == 200
+        assert 'sent' in resend_resp.json()['message'].lower()

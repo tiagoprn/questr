@@ -76,6 +76,53 @@ class TestUserRepository:
         assert found.email == created.email
 
     @pytest.mark.asyncio
+    async def test_get_by_email_with_plus_tag(
+        self, repo: UserRepository, db_session: AsyncSession
+    ) -> None:
+        """get_by_email matches the full email including + tag exactly."""
+        uid1 = uuid7()
+        uid2 = uuid7()
+        user1 = User(
+            id=uid1,
+            username=f'plus1_{uid1.hex[:8]}',
+            email='base+tag1@example.com',
+            first_name='Plus',
+            last_name='One',
+            password_hash='hash',
+            role=UserRole.USER,
+            status=UserStatus.PENDING,
+        )
+        user2 = User(
+            id=uid2,
+            username=f'plus2_{uid2.hex[:8]}',
+            email='base+tag2@example.com',
+            first_name='Plus',
+            last_name='Two',
+            password_hash='hash2',
+            role=UserRole.USER,
+            status=UserStatus.PENDING,
+        )
+        await repo.create(user1)
+        await repo.create(user2)
+        await db_session.flush()
+
+        # Act: search by exact tag1
+        found1 = await repo.get_by_email('base+tag1@example.com')
+        assert found1 is not None
+        assert found1.id == uid1
+        assert found1.email == 'base+tag1@example.com'
+
+        # Act: search by exact tag2
+        found2 = await repo.get_by_email('base+tag2@example.com')
+        assert found2 is not None
+        assert found2.id == uid2
+        assert found2.email == 'base+tag2@example.com'
+
+        # Act: search by base email (no tag) returns None
+        found3 = await repo.get_by_email('base@example.com')
+        assert found3 is None
+
+    @pytest.mark.asyncio
     async def test_update_status(
         self,
         created_user: tuple,

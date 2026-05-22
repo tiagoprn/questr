@@ -127,6 +127,8 @@ class AuthService:
         existing = await self.user_repo.get_by_username(normalized_username)
         if existing:
             raise UserAlreadyExistsError('Username already exists')
+        # NOTE: get_by_email uses exact match (full string, including `+` tag),
+        # so user+tag1@domain and user+tag2@domain are distinct users.
         existing = await self.user_repo.get_by_email(email)
         if existing:
             raise UserAlreadyExistsError('Email already exists')
