@@ -32,8 +32,13 @@ class Settings(BaseSettings):
     SMTP_USE_STARTTLS: bool = True
     EMAIL_FROM: str = 'noreply@questr.app'
 
+    APP_URL: str = 'http://localhost:8000'
     RATE_LIMIT_RESEND_MAX: int = 3
     RATE_LIMIT_RESEND_WINDOW_HOURS: int = 1
+
+    @property
+    def app_url(self) -> str:
+        return self.APP_URL.rstrip('/')
 
     model_config = {'env_file': '.env', 'extra': 'ignore'}
 

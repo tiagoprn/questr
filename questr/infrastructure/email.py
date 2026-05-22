@@ -36,9 +36,7 @@ class SmtpEmailService(BaseEmailService):
         self.use_starttls = use_starttls
 
     async def send_verification_email(self, to_email: str, token: str) -> bool:
-        verification_url = (
-            f"POST /api/v1/auth/verify-email with body: {{'token': '{token}'}}"
-        )
+        verification_url = f'{settings.app_url}/v1/auth/verify-email/{token}'
 
         message = EmailMessage()
         message['From'] = self.from_email
@@ -47,6 +45,13 @@ class SmtpEmailService(BaseEmailService):
         message.set_content(
             f'Click the following link to verify your email: '
             f'{verification_url}'
+        )
+        message.add_alternative(
+            f'<html><body>'
+            f'<p>Click the following link to verify your email:</p>'
+            f'<p><a href="{verification_url}">{verification_url}</a></p>'
+            f'</body></html>',
+            subtype='html',
         )
 
         try:
