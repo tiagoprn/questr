@@ -36,7 +36,9 @@ class SmtpEmailService(BaseEmailService):
         self.use_starttls = use_starttls
 
     async def send_verification_email(self, to_email: str, token: str) -> bool:
-        verification_url = f'{settings.app_url}/v1/auth/verify-email/{token}'
+        verification_url = (
+            f'{settings.app_url}/api/v1/auth/verify-email/{token}'
+        )
 
         message = EmailMessage()
         message['From'] = self.from_email
