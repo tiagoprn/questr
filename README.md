@@ -82,5 +82,5 @@ This project uses Alembic for database migrations. Use these Makefile commands:
 
 ### API
 
-- Swagger: <http://kvm-labs:8000/docs>
-- Redoc: <http://kvm-labs:8000/redoc>
+- Swagger (interactive): <http://kvm-labs:8000/docs>
+- Redoc (only documentation): <http://kvm-labs:8000/redoc>
