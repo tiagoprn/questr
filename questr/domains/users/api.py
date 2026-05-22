@@ -49,10 +49,6 @@ class SignupResponse(BaseModel):
     model_config = {'from_attributes': True}
 
 
-class VerifyEmailRequest(BaseModel):
-    token: str
-
-
 class VerifyEmailResponse(BaseModel):
     id: UUID
     username: str
@@ -143,18 +139,18 @@ async def signup(
     return SignupResponse.model_validate(user)
 
 
-@router.post(
-    '/verify-email',
+@router.get(
+    '/verify-email/{token}',
     response_model=VerifyEmailResponse,
     responses={
         400: {'description': 'Invalid or expired token'},
     },
 )
 async def verify_email(
-    payload: VerifyEmailRequest,
+    token: str,
     service: T_AuthService,
 ) -> VerifyEmailResponse:
-    user = await service.verify_email(payload.token)
+    user = await service.verify_email(token)
     return VerifyEmailResponse.model_validate(user)
 
 

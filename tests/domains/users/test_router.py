@@ -60,9 +60,8 @@ class TestVerifyEmail:
         self,
         client: AsyncClient,
     ) -> None:
-        response = await client.post(
-            '/api/v1/auth/verify-email',
-            json={'token': 'invalid_token'},
+        response = await client.get(
+            '/api/v1/auth/verify-email/invalid_token',
         )
         assert response.status_code == 400
 
@@ -97,9 +96,8 @@ class TestVerifyEmail:
         assert signup_response.status_code == 201
         assert 'token' in captured
 
-        verify_response = await client.post(
-            '/api/v1/auth/verify-email',
-            json={'token': captured['token']},
+        verify_response = await client.get(
+            f'/api/v1/auth/verify-email/{captured["token"]}',
         )
         assert verify_response.status_code == 200
         assert verify_response.json()['status'] == 'active'
