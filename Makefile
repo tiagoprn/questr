@@ -155,3 +155,8 @@ pgcli:  ## Starts pgcli (requires it installed with uv tool)
 
 fix-permissions:  ## Make the scripts executable
 	chmod +x scripts/*.sh
+
+dev-hurl-create-users:  ## create default users through the API using hurl (requires the dev-server up)
+	@hurl --very-verbose --variables-file hurl/vars/auth/signup/user_001.vars hurl/auth/signup.hurl
+	@hurl --very-verbose --variables-file hurl/vars/auth/signup/user_002.vars hurl/auth/signup.hurl
+	@hurl --very-verbose --variables-file hurl/vars/auth/signup/user_003.vars hurl/auth/signup.hurl
