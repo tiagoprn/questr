@@ -80,6 +80,37 @@ This project uses Alembic for database migrations. Use these Makefile commands:
 4. Run `make db-upgrade` to apply it
 5. To rollback: `make db-downgrade`
 
+### Shell support
+
+Questr provides an IPython-based interactive shell for running queries
+against the database with all ORM models, async session, and settings
+auto-imported.
+
+See the [full documentation](docs/backend/shell.md) for usage and details.
+
+### ADR
+
+An Architecture Decision Record was created to address a lint/type-checker issue
+with sandbox scripts executed via the shell.
+
+**Problem:** Scripts run by `make shell` receive variables like `session`,
+`UserORMModel`, and `select` dynamically at runtime via `runpy.run_path()`.
+Static analysis tools (`ruff`, `ty`) flag these names as undefined.
+
+**Decision:** A static sandbox package was created at
+`scripts/fast_shell/__init__.py` that re-exports all ORM models and type
+declarations. The shell injects the runtime session into this module before
+executing scripts. New sandbox scripts import from `scripts.fast_shell`
+instead of relying on dynamic globals, making all names resolvable by
+static analysis tools.
+
+- **ruff:** Zero violations after the change
+- **ty:** All checks pass
+- **Execution:** Sandbox scripts work correctly
+
+For the full ADR, see:
+`/storage/src/pi-session/codesimple/adr.20260526-095507.md`
+
 ### API
 
 - Swagger (interactive): <http://kvm-labs:8000/docs>

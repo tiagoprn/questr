@@ -41,6 +41,9 @@ install:  ## Install dependencies using uv
 	@uv lock
 	@echo "Installation complete!"
 
+shell:  ## Open interactive query shell or execute a script. Usage: make shell [SCRIPT=path/to/script.py]
+	@uv run python -m questr.shell $(if $(SCRIPT),--script $(SCRIPT),)
+
 dev-server:  ## Run development server
 	@uv run uvicorn questr.factory:create_app --reload --host 0.0.0.0 --port 8000
 

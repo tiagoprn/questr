@@ -27,6 +27,7 @@ dependencies = [
     "redis[hiredis]>=5.0.0",
     "factory-boy>=3.3.0",
     "testcontainers[redis]>=4.0.0",
+    "ipython>=8.0",
 ]
 
 [build-system]
