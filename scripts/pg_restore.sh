@@ -35,14 +35,15 @@ if [ ! -f "$BACKUP_FILE" ]; then
     exit 1
 fi
 
-POSTGRES_CONTAINER_NAME=$(docker compose ps -q db)
+# Get the container id of the postgres service from docker-compose.yml
+POSTGRES_CONTAINER_ID=$(docker ps | grep questr_postgres | awk '{print $1}')
 
-if [ -z "$POSTGRES_CONTAINER_NAME" ]; then
-    echo "Error: Could not find the PostgreSQL container name. Ensure docker compose is running and 'db' service is defined."
+if [ -z "$POSTGRES_CONTAINER_ID" ]; then
+    echo "Error: Could not find the PostgreSQL container id. Ensure it is running."
     exit 1
 fi
 
-echo "Restoring database to container: ${POSTGRES_CONTAINER_NAME}..."
+echo "Restoring database to container: ${POSTGRES_CONTAINER_ID}..."
 
 CONTAINER_BACKUP_FILENAME=$(basename "$BACKUP_FILE")
 CONTAINER_BACKUP_PATH="/backups/${CONTAINER_BACKUP_FILENAME}"
@@ -55,7 +56,7 @@ RESTORE_OUTPUT=$(docker exec \
     -e PGPASSWORD=${POSTGRES_PASSWORD} \
     -e POSTGRES_USER=${POSTGRES_USER} \
     -e POSTGRES_DB=${POSTGRES_DB} \
-    ${POSTGRES_CONTAINER_NAME} \
+    ${POSTGRES_CONTAINER_ID} \
     pg_restore -v --dbname=${POSTGRES_DB} --host=localhost --username=${POSTGRES_USER} --clean --if-exists --no-owner --no-acl --single-transaction "${CONTAINER_BACKUP_PATH}" 2>&1)
 EXIT_CODE=$?
 set -e

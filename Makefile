@@ -122,7 +122,7 @@ clean-postgres-data:
 	@echo "Stopping and removing containers..."
 	@docker compose down --volumes # This stops and removes containers THEN removes volumes.
 	@echo "Removing PostgreSQL data directory: ./db_data/postgresql..."
-	@sudo rm -rf ./db_data/postgresql/* # Use sudo for permissions, target only contents. Ensure this path is correct.
+	@sudo rm -rf ./ops/dev/infra/db/data/postgresql
 	@echo "PostgreSQL data directory cleaned."
 
 start-db-only:
@@ -132,9 +132,9 @@ start-db-only:
 	@echo "Makefile env check: POSTGRES_USER='${POSTGRES_USER}', POSTGRES_DB='${POSTGRES_DB}', POSTGRES_PASSWORD='${POSTGRES_PASSWORD}'"
 	docker compose -p $(shell basename $(PWD)) \
 		-f docker-compose.yml \
-		up -d db
-	@echo "Giving PostgreSQL a moment to initialize and become ready..."
-	@sleep 10 # Give it some time to initialize and pass its internal checks.
+		up -d questr_database
+	@echo "Giving PostgreSQL some seconds to initialize and become ready..."
+	@sleep 30 # Give it some time to initialize and pass its internal checks.
 	@echo "PostgreSQL container started. Proceeding."
 
 restore-db-after-start:
@@ -142,12 +142,21 @@ restore-db-after-start:
 	@echo "Running database restore script after DB is up..."
 	@if [ -z "$(FILE)" ]; then \
 		echo "Error: No FILE specified."; \
-		echo "Usage: make live-restore FILE=./backups/my_backup.dump"; \
+		echo "Usage: make db-live-restore FILE=./backups/my_backup.dump"; \
 		exit 1; \
 	fi
 	@./scripts/pg_restore.sh "$(FILE)"
 
-db-live-restore: clean-postgres-data start-db-only restore-db-after-start  ## Perform live db restore from a given db dump file, auto-starting the containers after finished. Usage: make live-restore FILE=./backups/file.dump
+_validate:
+	$(GUARD_CHECK)
+	@if [ -z "$(FILE)" ]; then \
+		echo "Error: No FILE specified."; \
+		echo "Usage: make db-live-restore FILE=./backups/file.dump"; \
+		exit 1; \
+	fi
+
+db-live-restore: _GUARD := true
+db-live-restore: _validate clean-postgres-data start-db-only restore-db-after-start  ## Perform live db restore from a given db dump file, auto-starting the containers after finished. Usage: make db-live-restore FILE=./backups/file.dump
 
 pgcli:  ## Starts pgcli (requires it installed with uv tool)
 	@echo "Starting pgcli..."

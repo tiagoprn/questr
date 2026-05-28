@@ -13,11 +13,11 @@ else
     exit 1
 fi
 
-# Get the container name of the postgres service from docker-compose.yml
+# Get the container id of the postgres service from docker-compose.yml
 POSTGRES_CONTAINER_ID=$(docker ps | grep questr_postgres | awk '{print $1}')
 
 if [ -z "$POSTGRES_CONTAINER_ID" ]; then
-    echo "Error: Could not find the PostgreSQL container name. Ensure docker compose is running and 'db' service is defined."
+    echo "Error: Could not find the PostgreSQL container id. Ensure it is running."
     exit 1
 fi
 
