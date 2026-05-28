@@ -113,6 +113,10 @@ db-upgrade:  ## Apply all pending migrations
 db-downgrade:  ## Rollback last migration
 	@alembic downgrade -1
 
+db-dump:  ## Perform a database backup using pg_dump
+	@echo "Running database dump script..."
+	@./scripts/pg_dump.sh
+
 clean-postgres-data:
 	$(GUARD_CHECK)
 	@echo "Stopping and removing containers..."
@@ -120,8 +124,6 @@ clean-postgres-data:
 	@echo "Removing PostgreSQL data directory: ./db_data/postgresql..."
 	@sudo rm -rf ./db_data/postgresql/* # Use sudo for permissions, target only contents. Ensure this path is correct.
 	@echo "PostgreSQL data directory cleaned."
-
-live-restore: clean-postgres-data start-db-only restore-db-after-start  ## Perform live db restore from a given db dump file, auto-starting the containers after finished. Usage: make live-restore FILE=./backups/file.dump
 
 start-db-only:
 	$(GUARD_CHECK)
@@ -145,9 +147,7 @@ restore-db-after-start:
 	fi
 	@./scripts/pg_restore.sh "$(FILE)"
 
-dump-db:  ## Perform a database backup using pg_dump
-	@echo "Running database dump script..."
-	@./scripts/pg_dump.sh
+db-live-restore: clean-postgres-data start-db-only restore-db-after-start  ## Perform live db restore from a given db dump file, auto-starting the containers after finished. Usage: make live-restore FILE=./backups/file.dump
 
 pgcli:  ## Starts pgcli (requires it installed with uv tool)
 	@echo "Starting pgcli..."

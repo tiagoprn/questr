@@ -14,9 +14,9 @@ else
 fi
 
 # Get the container name of the postgres service from docker-compose.yml
-POSTGRES_CONTAINER_NAME=$(docker compose ps -q db)
+POSTGRES_CONTAINER_ID=$(docker ps | grep questr_postgres | awk '{print $1}')
 
-if [ -z "$POSTGRES_CONTAINER_NAME" ]; then
+if [ -z "$POSTGRES_CONTAINER_ID" ]; then
     echo "Error: Could not find the PostgreSQL container name. Ensure docker compose is running and 'db' service is defined."
     exit 1
 fi
@@ -32,7 +32,7 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 BACKUP_FILENAME="questr_db_backup_${TIMESTAMP}.dump"
 HOST_BACKUP_PATH="./backups/${BACKUP_FILENAME}" # Path on the host
 
-echo "Starting database backup using container: ${POSTGRES_CONTAINER_NAME}..."
+echo "Starting database backup using container: ${POSTGRES_CONTAINER_ID}..."
 echo "Backup will be saved to host at: ${HOST_BACKUP_PATH}"
 
 echo "Running pg_dump through docker exec..."
@@ -43,7 +43,7 @@ PGPASSWORD=${POSTGRES_PASSWORD} docker exec \
     -e PGPASSWORD=${POSTGRES_PASSWORD} \
     -e POSTGRES_USER=${POSTGRES_USER} \
     -e POSTGRES_DB=${POSTGRES_DB} \
-    ${POSTGRES_CONTAINER_NAME} \
+    ${POSTGRES_CONTAINER_ID} \
     pg_dump -F c -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB} --clean --if-exists --no-owner --no-acl >"${HOST_BACKUP_PATH}"
 
 if [ $? -eq 0 ]; then
