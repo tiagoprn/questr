@@ -22,15 +22,13 @@ if [ -z "$POSTGRES_CONTAINER_ID" ]; then
 fi
 
 # Ensure the backups directory exists on the host
-mkdir -p backups
+BACKUP_DIR="./backups/postgres/db-dumps"
+mkdir -p "${BACKUP_DIR}"
 
-# Define the backup directory INSIDE the container, mapped by docker-compose
-# This path is where the script *expects* the backup to be written *by the container's pg_dump*
-CONTAINER_BACKUP_DIR="/backups"
+# The backup directory INSIDE the container, mapped by docker-compose via ./backups:/backups
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-# Changed extension to .dump to indicate binary custom format
 BACKUP_FILENAME="questr_db_backup_${TIMESTAMP}.dump"
-HOST_BACKUP_PATH="./backups/${BACKUP_FILENAME}" # Path on the host
+HOST_BACKUP_PATH="${BACKUP_DIR}/${BACKUP_FILENAME}"
 
 echo "Starting database backup using container: ${POSTGRES_CONTAINER_ID}..."
 echo "Backup will be saved to host at: ${HOST_BACKUP_PATH}"

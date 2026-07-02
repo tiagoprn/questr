@@ -120,7 +120,7 @@ db-dump:  ## Perform a database backup using pg_dump
 clean-postgres-data:
 	$(GUARD_CHECK)
 	@echo "Stopping and removing containers..."
-	@docker compose down --volumes # This stops and removes containers THEN removes volumes.
+	@docker compose down # This stops and removes containers.
 	@echo "Removing PostgreSQL data directory: ./db_data/postgresql..."
 	@sudo rm -rf ./ops/dev/infra/db/data/postgresql
 	@echo "PostgreSQL data directory cleaned."
@@ -156,7 +156,7 @@ _validate:
 	fi
 
 db-live-restore: _GUARD := true
-db-live-restore: _validate clean-postgres-data start-db-only restore-db-after-start  ## Perform live db restore from a given db dump file, auto-starting the containers after finished. Usage: make db-live-restore FILE=./backups/file.dump
+db-live-restore: _validate clean-postgres-data start-db-only restore-db-after-start docker-start  ## Perform live db restore from a given db dump file, auto-starting the containers after finished. Usage: make db-live-restore FILE=.backups/postgres/db-dumps/file.dump
 
 pgcli:  ## Starts pgcli (requires it installed with uv tool)
 	@echo "Starting pgcli..."

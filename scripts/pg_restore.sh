@@ -35,6 +35,16 @@ if [ ! -f "$BACKUP_FILE" ]; then
     exit 1
 fi
 
+# Resolve the backup file to an absolute path
+HOST_BACKUP_PATH=$(realpath "$BACKUP_FILE")
+
+# Derive the container-side path by stripping the "./backups" parent prefix and prepending /backups
+# Example: /absolute/path/to/project/backups/postgres/db-dumps/file.dump
+# becomes: /backups/postgres/db-dumps/file.dump
+BACKUPS_PARENT=$(realpath "./backups")
+RELATIVE_PATH="${HOST_BACKUP_PATH#$BACKUPS_PARENT/}"
+CONTAINER_BACKUP_PATH="/backups/${RELATIVE_PATH}"
+
 # Get the container id of the postgres service from docker-compose.yml
 POSTGRES_CONTAINER_ID=$(docker ps | grep questr_postgres | awk '{print $1}')
 
@@ -44,9 +54,6 @@ if [ -z "$POSTGRES_CONTAINER_ID" ]; then
 fi
 
 echo "Restoring database to container: ${POSTGRES_CONTAINER_ID}..."
-
-CONTAINER_BACKUP_FILENAME=$(basename "$BACKUP_FILE")
-CONTAINER_BACKUP_PATH="/backups/${CONTAINER_BACKUP_FILENAME}"
 
 echo "Using pg_restore command inside the container..."
 
