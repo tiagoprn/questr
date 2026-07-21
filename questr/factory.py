@@ -3,9 +3,14 @@ from fastapi.responses import JSONResponse
 
 from questr.api.router import api_router
 from questr.common.exceptions import (
+    AccountBannedError,
     AccountSuspendedError,
+    AuthenticationError,
+    EmailNotVerifiedError,
     InvalidVerificationTokenError,
+    RateLimiterUnavailableError,
     RateLimitExceededError,
+    TooManyActiveSessionsError,
     UserAlreadyExistsError,
 )
 from questr.lifespan import lifespan
@@ -35,6 +40,26 @@ def create_app() -> FastAPI:
     app.add_exception_handler(
         AccountSuspendedError,
         _account_suspended_handler,
+    )
+    app.add_exception_handler(
+        AccountBannedError,
+        _account_banned_handler,
+    )
+    app.add_exception_handler(
+        AuthenticationError,
+        _authentication_error_handler,
+    )
+    app.add_exception_handler(
+        EmailNotVerifiedError,
+        _email_not_verified_handler,
+    )
+    app.add_exception_handler(
+        TooManyActiveSessionsError,
+        _too_many_active_sessions_handler,
+    )
+    app.add_exception_handler(
+        RateLimiterUnavailableError,
+        _rate_limiter_unavailable_handler,
     )
 
     app.include_router(api_router)
@@ -73,5 +98,57 @@ async def _account_suspended_handler(
 ) -> JSONResponse:
     return JSONResponse(
         status_code=403,
+        content={'detail': str(exc), 'error_code': 'account_suspended'},
+    )
+
+
+async def _account_banned_handler(
+    request: Request, exc: AccountBannedError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={'detail': str(exc), 'error_code': 'account_banned'},
+    )
+
+
+async def _authentication_error_handler(
+    request: Request, exc: AuthenticationError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={'detail': str(exc)},
+    )
+
+
+async def _email_not_verified_handler(
+    request: Request, exc: EmailNotVerifiedError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={
+            'detail': str(exc),
+            'error_code': 'email_not_verified',
+        },
+    )
+
+
+async def _too_many_active_sessions_handler(
+    request: Request, exc: TooManyActiveSessionsError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={
+            'detail': str(exc),
+            'error_code': 'too_many_active_sessions',
+            'recovery': ['logout_all'],
+        },
+    )
+
+
+async def _rate_limiter_unavailable_handler(
+    request: Request, exc: RateLimiterUnavailableError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
         content={'detail': str(exc)},
     )
