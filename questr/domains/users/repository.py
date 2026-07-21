@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid7
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from questr.common.enums import UserRole, UserStatus
 from questr.infrastructure.orm.models import (
     EmailVerificationORMModel,
+    SessionORMModel,
     UserORMModel,
 )
 
@@ -26,6 +27,25 @@ class User:
     password_hash: str = ''
     role: UserRole = UserRole.USER
     status: UserStatus = UserStatus.PENDING
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass
+class Session:
+    """Session domain object."""
+
+    id: UUID | None = None
+    user_id: UUID | None = None
+    issued_at: datetime | None = None
+    last_activity: datetime | None = None
+    expires_at: datetime | None = None
+    absolute_expires_at: datetime | None = None
+    remember_me: bool = False
+    ip_address: str = ''
+    user_agent: str = ''
+    csrf_token_hash: str = ''
+    is_active: bool = True
 
 
 @dataclass
@@ -103,6 +123,8 @@ class UserRepository:
             password_hash=orm_user.password_hash,
             role=orm_user.role,
             status=orm_user.status,
+            created_at=orm_user.created_at,
+            updated_at=orm_user.updated_at,
         )
 
 
@@ -165,4 +187,101 @@ class EmailVerificationRepository:
             token_hash=orm_v.token_hash,
             expires_at=orm_v.expires_at,
             used_at=orm_v.used_at,
+        )
+
+
+class SessionRepository:
+    """Repository for session persistence."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(self, session_obj: Session) -> Session:
+        orm_session = SessionORMModel(
+            id=session_obj.id or uuid7(),
+            user_id=session_obj.user_id,
+            issued_at=session_obj.issued_at,
+            last_activity=session_obj.last_activity,
+            expires_at=session_obj.expires_at,
+            absolute_expires_at=session_obj.absolute_expires_at,
+            remember_me=session_obj.remember_me,
+            ip_address=session_obj.ip_address,
+            user_agent=session_obj.user_agent,
+            csrf_token_hash=session_obj.csrf_token_hash,
+            is_active=session_obj.is_active,
+        )
+        self.session.add(orm_session)
+        await self.session.flush()
+        return self._to_domain(orm_session)
+
+    async def get_by_id(self, session_id: UUID) -> Session | None:
+        result = await self.session.execute(
+            select(SessionORMModel).where(SessionORMModel.id == session_id)
+        )
+        orm_session = result.scalar_one_or_none()
+        return self._to_domain(orm_session) if orm_session else None
+
+    async def get_by_user_id(self, user_id: UUID) -> list[Session]:
+        result = await self.session.execute(
+            select(SessionORMModel).where(SessionORMModel.user_id == user_id)
+        )
+        orm_sessions = result.scalars().all()
+        return [self._to_domain(s) for s in orm_sessions]
+
+    async def deactivate(self, session_id: UUID) -> bool:
+        result = await self.session.execute(
+            update(SessionORMModel)
+            .where(SessionORMModel.id == session_id)
+            .values(is_active=False)
+        )
+        await self.session.flush()
+        return result.rowcount > 0
+
+    async def revoke_all_for_user(self, user_id: UUID) -> int:
+        result = await self.session.execute(
+            update(SessionORMModel)
+            .where(
+                SessionORMModel.user_id == user_id,
+                SessionORMModel.is_active.is_(True),
+            )
+            .values(is_active=False)
+        )
+        await self.session.flush()
+        return result.rowcount
+
+    async def count_active_for_user(self, user_id: UUID) -> int:
+        now = datetime.now(timezone.utc)
+        result = await self.session.execute(
+            select(SessionORMModel).where(
+                SessionORMModel.user_id == user_id,
+                SessionORMModel.is_active.is_(True),
+                SessionORMModel.absolute_expires_at > now,
+            )
+        )
+        return len(result.scalars().all())
+
+    async def update_last_activity(
+        self, session_id: UUID, timestamp: datetime
+    ) -> None:
+        await self.session.execute(
+            update(SessionORMModel)
+            .where(SessionORMModel.id == session_id)
+            .values(last_activity=timestamp)
+        )
+        await self.session.flush()
+
+    @staticmethod
+    def _to_domain(orm_s: SessionORMModel) -> Session:
+        return Session(
+            id=orm_s.id,
+            user_id=orm_s.user_id,
+            issued_at=orm_s.issued_at,
+            last_activity=orm_s.last_activity,
+            expires_at=orm_s.expires_at,
+            absolute_expires_at=orm_s.absolute_expires_at,
+            remember_me=orm_s.remember_me,
+            ip_address=orm_s.ip_address,
+            user_agent=orm_s.user_agent,
+            csrf_token_hash=orm_s.csrf_token_hash,
+            is_active=orm_s.is_active,
         )

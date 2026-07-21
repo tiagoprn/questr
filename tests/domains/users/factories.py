@@ -7,6 +7,7 @@ from factory.faker import Faker
 from questr.common.enums import UserRole, UserStatus
 from questr.infrastructure.orm.models import (
     EmailVerificationORMModel,
+    SessionORMModel,
     UserORMModel,
 )
 
@@ -43,3 +44,24 @@ class EmailVerificationFactory(factory.Factory):
         lambda: datetime.now(timezone.utc) + timedelta(hours=24)
     )
     used_at = None
+
+
+class SessionFactory(factory.Factory):
+    class Meta:
+        model = SessionORMModel
+
+    id = factory.LazyFunction(uuid7)
+    user_id = factory.LazyFunction(uuid7)
+    issued_at = factory.LazyFunction(lambda: datetime.now(timezone.utc))
+    last_activity = factory.LazyFunction(lambda: datetime.now(timezone.utc))
+    expires_at = factory.LazyFunction(
+        lambda: datetime.now(timezone.utc) + timedelta(minutes=30)
+    )
+    absolute_expires_at = factory.LazyFunction(
+        lambda: datetime.now(timezone.utc) + timedelta(hours=8)
+    )
+    remember_me = False
+    ip_address = factory.Faker('ipv4')
+    user_agent = 'Mozilla/5.0 Test'
+    csrf_token_hash = factory.Faker('sha256')
+    is_active = True
