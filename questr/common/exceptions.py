@@ -90,4 +90,4 @@ class RateLimitExceededError(StructuredQuestrException):
     """Raised when rate limit is exceeded."""
 
     def __init__(self, message: str = '') -> None:
-        super().__init__(error_code='rate_limit_exceeded', message=message)
+        super().__init__(error_code='rate_limited', message=message)

@@ -49,7 +49,7 @@ class TestExistingExceptionsRetrofitted:
         [
             (EmailNotVerifiedError, 'email_not_verified'),
             (AccountSuspendedError, 'account_suspended'),
-            (RateLimitExceededError, 'rate_limit_exceeded'),
+            (RateLimitExceededError, 'rate_limited'),
         ],
     )
     def test_exception_has_correct_code(

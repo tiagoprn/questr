@@ -34,6 +34,7 @@ from questr.domains.users.repository import (
 from questr.infrastructure.email import BaseEmailService
 from questr.infrastructure.login_rate_limiter import LoginRateLimiter
 from questr.infrastructure.rate_limiter import RedisRateLimiter
+from questr.settings import settings
 
 logger = logging.getLogger('questr.auth')
 pwd_context = PasswordHash(hashers=[Argon2Hasher()])
@@ -267,6 +268,10 @@ class AuthService:
         if user is None:
             # No-user branch: dummy verify for timing equalisation (TD-006)
             verify_password(password, _DUMMY_HASH)
+            # FR-007: every attempt counts toward the per-IP window,
+            # even when there is no account to lock out.
+            if self.login_rate_limiter is not None:
+                await self.login_rate_limiter.record_ip_attempt(client_ip)
             logger.info(
                 'login_attempt',
                 extra={
@@ -281,6 +286,9 @@ class AuthService:
         # then raise structured error (TD-006 constant-time design)
         if user.status != UserStatus.ACTIVE:
             verify_password(password, user.password_hash)
+            # FR-007: account-state rejections still count per-IP.
+            if self.login_rate_limiter is not None:
+                await self.login_rate_limiter.record_ip_attempt(client_ip)
             logger.info(
                 'login_attempt',
                 extra={
@@ -361,9 +369,11 @@ class AuthService:
         else:
             created_session = None
 
-        # Reset failure counter on success
+        # Reset failure counter on success; the attempt itself still
+        # counts toward the per-IP window (FR-007).
         if self.login_rate_limiter is not None:
             await self.login_rate_limiter.record_success(email)
+            await self.login_rate_limiter.record_ip_attempt(client_ip)
 
         logger.info(
             'login_attempt',
@@ -412,8 +422,12 @@ class AuthService:
             await self.session_repo.deactivate(session_id)
             raise AuthenticationError('Session expired')
 
-        # Eagerly update last_activity and extend idle window
-        await self.session_repo.update_last_activity(session_id, now)
+        # Eagerly update last_activity and slide the idle window
+        # forward from this request (FR-005; design §7 step 6).
+        new_expiry = now + timedelta(minutes=settings.SESSION_IDLE_MINUTES)
+        await self.session_repo.update_last_activity(
+            session_id, now, new_expiry
+        )
 
         user = await self.user_repo.get_by_id(session.user_id)
         if user is None:

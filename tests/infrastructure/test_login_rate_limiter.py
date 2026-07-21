@@ -57,6 +57,19 @@ class TestLoginRateLimiter:
         with pytest.raises(RateLimitExceededError):
             await limiter.check_login_allowed(ACCOUNT_KEY, IP_KEY)
 
+    async def test_record_ip_attempt_counts_toward_ip_window(
+        self, limiter: LoginRateLimiter
+    ) -> None:
+        """FR-007: IP-only attempts fill the window without account state."""
+        for _ in range(20):
+            await limiter.record_ip_attempt(IP_KEY)
+
+        with pytest.raises(RateLimitExceededError):
+            await limiter.check_login_allowed('user:no-failures', IP_KEY)
+
+        # The per-account counter is untouched: a fresh IP is allowed.
+        await limiter.check_login_allowed('user:no-failures', 'ip:10.0.0.9')
+
     async def test_lockout_lifts_after_window_elapses(
         self, limiter: LoginRateLimiter
     ) -> None:

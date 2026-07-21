@@ -261,12 +261,16 @@ class SessionRepository:
         return len(result.scalars().all())
 
     async def update_last_activity(
-        self, session_id: UUID, timestamp: datetime
+        self,
+        session_id: UUID,
+        timestamp: datetime,
+        expires_at: datetime,
     ) -> None:
+        """Update last_activity and slide the idle window (FR-005)."""
         await self.session.execute(
             update(SessionORMModel)
             .where(SessionORMModel.id == session_id)
-            .values(last_activity=timestamp)
+            .values(last_activity=timestamp, expires_at=expires_at)
         )
         await self.session.flush()
 

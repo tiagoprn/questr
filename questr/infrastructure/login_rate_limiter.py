@@ -151,3 +151,16 @@ class LoginRateLimiter:
         """Reset the per-account failure counter on successful login."""
         a_key = self._account_key(account_key)
         await self._safe_call(self.redis.delete, a_key)
+
+    async def record_ip_attempt(self, ip_key: str) -> None:
+        """Record an attempt in the per-IP window only (FR-007).
+
+        Every login attempt counts toward the per-IP window, including
+        attempts targeting nonexistent accounts and successful logins.
+        The per-account counter is not touched.
+        """
+        now = time.time()
+        member = f'{now}:{uuid.uuid4().hex}'
+        await self._safe_call(
+            self.redis.zadd, self._ip_key(ip_key), {member: now}
+        )

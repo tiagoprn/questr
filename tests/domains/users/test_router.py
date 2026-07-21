@@ -322,8 +322,6 @@ class TestLogout:
         """AC-3: Logout-all returns the revoked count."""
         svc = MagicMock(spec=AuthService)
         svc.logout_all = AsyncMock(return_value=3)
-        svc.session_repo = MagicMock()
-        svc.session_repo.get_by_id = AsyncMock(return_value=None)
         overrides = {get_auth_service_v2: lambda: svc}
         app.dependency_overrides.update(overrides)
 
@@ -331,7 +329,7 @@ class TestLogout:
         resp = await client.post('/api/v1/auth/logout-all')
         assert resp.status_code == 200
         data = resp.json()
-        assert data.get('sessions_revoked') == 0
+        assert data.get('sessions_revoked') == 3
 
 
 class TestGetCurrentUser:

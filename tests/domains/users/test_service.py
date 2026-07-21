@@ -75,6 +75,7 @@ def mock_login_rate_limiter() -> MagicMock:
     limiter.check_login_allowed = AsyncMock()
     limiter.record_failure = AsyncMock()
     limiter.record_success = AsyncMock()
+    limiter.record_ip_attempt = AsyncMock()
     return limiter
 
 
@@ -511,6 +512,67 @@ class TestLogin:
 
         mock_login_rate_limiter.record_failure.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_login_unknown_email_records_ip_attempt(
+        self,
+        auth_service: AuthService,
+        mock_user_repo: MagicMock,
+        mock_login_rate_limiter: MagicMock,
+    ) -> None:
+        """FR-007: no-user attempts count toward the per-IP window."""
+        mock_user_repo.get_by_email.return_value = None
+
+        with pytest.raises(AuthenticationError):
+            await auth_service.login(
+                email='unknown@example.com',
+                password='StrongPass1!',
+                client_ip='127.0.0.1',
+            )
+
+        mock_login_rate_limiter.record_ip_attempt.assert_called_once_with(
+            '127.0.0.1'
+        )
+        mock_login_rate_limiter.record_failure.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_login_success_records_ip_attempt(
+        self,
+        auth_service: AuthService,
+        mock_user_repo: MagicMock,
+        mock_session_repo: MagicMock,
+        mock_login_rate_limiter: MagicMock,
+    ) -> None:
+        """FR-007: successful logins also count toward the IP window."""
+        user_id = uuid7()
+        user = User(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            password_hash='$argon2id$v=19$m=65536,t=3,p=4$mockhash',
+            status=UserStatus.ACTIVE,
+        )
+        mock_user_repo.get_by_email.return_value = user
+        mock_session_repo.create.return_value = SessionDomain(
+            id=uuid7(),
+            user_id=user_id,
+            issued_at=datetime.now(timezone.utc),
+        )
+        mock_session_repo.count_active_for_user.return_value = 0
+
+        with patch(
+            'questr.domains.users.service.verify_password', return_value=True
+        ):
+            await auth_service.login(
+                email='test@example.com',
+                password='StrongPass1!',
+                client_ip='127.0.0.1',
+            )
+
+        mock_login_rate_limiter.record_ip_attempt.assert_called_once_with(
+            '127.0.0.1'
+        )
+        mock_login_rate_limiter.record_success.assert_called_once()
+
     @pytest.mark.parametrize(
         ('status', 'expected'),
         [
@@ -629,6 +691,9 @@ class TestValidateSession:
 
         assert result is not None
         mock_session_repo.update_last_activity.assert_called_once()
+        # FR-005: the idle window slides forward from the request time.
+        call = mock_session_repo.update_last_activity.call_args
+        assert call.args[2] - call.args[1] == timedelta(minutes=30)
 
     @pytest.mark.asyncio
     async def test_validate_session_idle_expired_deactivates_raises(

@@ -92,7 +92,7 @@ async def _rate_limit_handler(
 ) -> JSONResponse:
     return JSONResponse(
         status_code=429,
-        content={'detail': str(exc)},
+        content={'detail': str(exc), 'error_code': 'rate_limited'},
     )
 
 

@@ -172,7 +172,10 @@ class TestSessionRepository:
         old = created.last_activity
 
         new_time = datetime.now(timezone.utc) + timedelta(seconds=5)
-        await session_repo.update_last_activity(created.id, new_time)
+        new_expiry = new_time + timedelta(minutes=30)
+        await session_repo.update_last_activity(
+            created.id, new_time, new_expiry
+        )
 
         fetched = await session_repo.get_by_id(created.id)
         assert fetched is not None
@@ -181,3 +184,7 @@ class TestSessionRepository:
         diff = (fetched.last_activity - new_time).total_seconds()
         assert abs(diff) < 1  # noqa: PLR2004
         assert fetched.last_activity != old
+        # FR-005: the idle window slides along with the activity write.
+        assert fetched.expires_at is not None
+        expiry_diff = (fetched.expires_at - new_expiry).total_seconds()
+        assert abs(expiry_diff) < 1  # noqa: PLR2004

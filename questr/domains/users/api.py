@@ -213,6 +213,7 @@ T_AuthServiceV2 = Annotated[AuthService, Depends(get_auth_service_v2)]
 async def get_current_user(
     request: Request,
     auth_service: T_AuthServiceV2,
+    db_session: Annotated[AsyncSession, Depends(get_async_session)],
 ) -> dict:
     """Extract session from cookie and return user + CSRF token."""
     session_id = request.cookies.get('session_id')
@@ -222,7 +223,15 @@ async def get_current_user(
         session_uuid = UUID(session_id)
     except ValueError:
         raise AuthenticationError('Not authenticated') from None
-    user = await auth_service.validate_session(session_uuid)
+    try:
+        user = await auth_service.validate_session(session_uuid)
+    except AuthenticationError:
+        # FR-005: persist the expired-session invalidation. On the
+        # exception path the get_async_session teardown commit is
+        # skipped (the 401 propagates through the yield point), so
+        # without this commit the deactivation would be rolled back.
+        await db_session.commit()
+        raise
     # The CSRF token isn't stored in the service; the API layer
     # re-echoes it from the session. We rely on the cookie.
     csrf_token = request.cookies.get('csrf_token', '')
@@ -355,18 +364,18 @@ async def login(
 @router.post(
     '/logout',
     response_model=LogoutResponse,
+    responses={
+        401: {'description': 'Not authenticated'},
+    },
 )
 async def logout(
     request: Request,
     service: T_AuthServiceV2,
+    _current: Annotated[dict, Depends(get_current_user)],
 ) -> LogoutResponse:
-    session_id = request.cookies.get('session_id')
-    if session_id:
-        try:
-            session_uuid = UUID(session_id)
-            await service.logout(session_uuid)
-        except ValueError:
-            pass
+    # get_current_user guarantees a syntactically valid session cookie.
+    session_uuid = UUID(request.cookies['session_id'])
+    await service.logout(session_uuid)
 
     secure = settings.SECURE_COOKIE
     resp = Response(
@@ -394,25 +403,16 @@ async def logout(
 @router.post(
     '/logout-all',
     response_model=LogoutAllResponse,
+    responses={
+        401: {'description': 'Not authenticated'},
+    },
 )
 async def logout_all(
-    request: Request,
     service: T_AuthServiceV2,
+    current: Annotated[dict, Depends(get_current_user)],
 ) -> LogoutAllResponse:
-    session_id = request.cookies.get('session_id')
-    user_id = None
-    if session_id:
-        try:
-            session_uuid = UUID(session_id)
-            session_obj = await service.session_repo.get_by_id(session_uuid)
-            if session_obj:
-                user_id = session_obj.user_id
-        except ValueError:
-            pass
-
-    revoked = 0
-    if user_id:
-        revoked = await service.logout_all(user_id)
+    user = current['user']
+    revoked = await service.logout_all(user.id)
 
     secure = settings.SECURE_COOKIE
     resp = Response(
