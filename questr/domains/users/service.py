@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import logging
 import re
 import secrets
@@ -69,6 +70,21 @@ def generate_verification_token() -> tuple[str, str]:
 
 def get_token_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(hours=24)
+
+
+def sanitize_ip(client_ip: str) -> str:
+    """Validate/truncate the client IP before persisting (design §5).
+
+    A value that parses as an IP is accepted (truncated to 45 chars if
+    over-length, e.g. a scoped IPv6 literal); anything else is stored as
+    ``'unknown'`` so a crafted X-Forwarded-For header cannot make
+    PostgreSQL reject the session row.
+    """
+    try:
+        ipaddress.ip_address(client_ip)
+    except ValueError:
+        return 'unknown'
+    return client_ip[:45]
 
 
 @dataclass
@@ -244,6 +260,7 @@ class AuthService:
         password: str,
         client_ip: str,
         remember_me: bool = False,
+        user_agent: str = '',
     ) -> dict:
         """Authenticate a user and create a session.
 
@@ -324,7 +341,7 @@ class AuthService:
         # Concurrent-session cap check
         if self.session_repo is not None:
             active = await self.session_repo.count_active_for_user(user.id)
-            if active >= 10:  # noqa: PLR2004
+            if active >= settings.MAX_CONCURRENT_SESSIONS:
                 logger.info(
                     'login_attempt',
                     extra={
@@ -346,12 +363,16 @@ class AuthService:
         # Determine session lifetime
         now = datetime.now(timezone.utc)
         if remember_me:
-            absolute_expires_at = now + timedelta(days=30)
+            absolute_expires_at = now + timedelta(
+                days=settings.SESSION_REMEMBER_DAYS
+            )
         else:
-            absolute_expires_at = now + timedelta(hours=8)
-        expires_at = now + timedelta(minutes=30)
+            absolute_expires_at = now + timedelta(
+                hours=settings.SESSION_ABSOLUTE_HOURS
+            )
+        expires_at = now + timedelta(minutes=settings.SESSION_IDLE_MINUTES)
 
-        # Create session record (IP/UA validation happens in T6 layer)
+        # Create session record (design §5: IP/UA sanitized pre-persist)
         if self.session_repo is not None:
             session = Session(
                 user_id=user.id,
@@ -360,8 +381,8 @@ class AuthService:
                 expires_at=expires_at,
                 absolute_expires_at=absolute_expires_at,
                 remember_me=remember_me,
-                ip_address=client_ip[:45],
-                user_agent='',  # Filled by API layer
+                ip_address=sanitize_ip(client_ip),
+                user_agent=user_agent[:512],
                 csrf_token_hash=csrf_hash,
                 is_active=True,
             )

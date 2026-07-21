@@ -188,6 +188,47 @@ class TestLoginFlow:
         assert len(data['csrf_token']) == 43
 
     @pytest.mark.asyncio
+    async def test_login_user_block_has_exact_contract_fields(
+        self, client: AsyncClient, app: object
+    ) -> None:
+        """D-002/design §6: the user block is exactly the safe field set
+        (review Issue 3 -- no first_name/last_name/role leakage)."""
+        email = await _signup(client, app)
+        resp = await _login(client, email)
+        assert resp.status_code == 200
+        user = resp.json()['user']
+        assert set(user.keys()) == {
+            'id',
+            'username',
+            'email',
+            'user_status',
+            'created_at',
+        }
+
+    @pytest.mark.asyncio
+    async def test_login_persists_user_agent_in_session_record(
+        self,
+        client: AsyncClient,
+        app: object,
+        db_session_maker: T_Maker,
+    ) -> None:
+        """FR-013: the session record stores the request User-Agent
+        (review Issue 2)."""
+        email = await _signup(client, app)
+        resp = await client.post(
+            LOGIN_PATH,
+            json={'email': email, 'password': PASSWORD},
+            headers={
+                'X-Forwarded-For': _unique_ip(),
+                'User-Agent': 'questr-review-test/1.0',
+            },
+        )
+        assert resp.status_code == 200
+        session_id = UUID(client.cookies['session_id'])
+        row = await _get_session_row(db_session_maker, session_id)
+        assert row.user_agent == 'questr-review-test/1.0'
+
+    @pytest.mark.asyncio
     async def test_wrong_password_returns_401(
         self, client: AsyncClient, app: object
     ) -> None:

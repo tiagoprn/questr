@@ -89,6 +89,31 @@ class TestLoginRateLimiter:
         with freeze_time('2026-01-01 12:30:00'):
             await limiter.check_login_allowed(ACCOUNT_KEY, IP_KEY)
 
+    async def test_lockout_anchored_to_trigger_not_oldest_failure(
+        self, limiter: LoginRateLimiter
+    ) -> None:
+        """FR-006: the 30-min lockout runs from the triggering failure,
+        not from the oldest failure in the window (review Issue 4)."""
+        with freeze_time('2026-01-01 12:00:00'):
+            await limiter.record_failure(ACCOUNT_KEY, IP_KEY)
+
+        # 4 more failures 14 min later: threshold reached at 12:14.
+        with freeze_time('2026-01-01 12:14:00'):
+            for _ in range(4):
+                await limiter.record_failure(ACCOUNT_KEY, IP_KEY)
+            with pytest.raises(RateLimitExceededError):
+                await limiter.check_login_allowed(ACCOUNT_KEY, IP_KEY)
+
+        # 35 min after the OLDEST failure but only 21 min after the
+        # trigger: the lockout must still be active.
+        with freeze_time('2026-01-01 12:35:00'):
+            with pytest.raises(RateLimitExceededError):
+                await limiter.check_login_allowed(ACCOUNT_KEY, IP_KEY)
+
+        # 31 min after the trigger: the lockout has lifted.
+        with freeze_time('2026-01-01 12:45:00'):
+            await limiter.check_login_allowed(ACCOUNT_KEY, IP_KEY)
+
     @freeze_time('2026-01-01 12:00:00')
     async def test_success_resets_failure_counter(
         self, limiter: LoginRateLimiter

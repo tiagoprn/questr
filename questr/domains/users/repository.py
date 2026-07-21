@@ -109,6 +109,11 @@ class UserRepository:
         if orm_user is None:
             return None
         orm_user.status = status
+        # Python-side timestamp (not ORM onupdate): an onupdate would
+        # expire the attribute on flush and force a lazy refresh, which
+        # raises MissingGreenlet in async sessions; it also uses the DB
+        # clock, which freezegun cannot control.
+        orm_user.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
         return self._to_domain(orm_user)
 

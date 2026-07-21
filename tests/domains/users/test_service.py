@@ -20,6 +20,7 @@ from questr.common.exceptions import (
 )
 from questr.domains.users.repository import Session as SessionDomain
 from questr.domains.users.service import AuthService, EmailVerification, User
+from questr.settings import settings
 
 
 @pytest.fixture
@@ -817,3 +818,138 @@ class TestLogout:
                 assert key not in msg, (
                     f'Excluded key "{key}" found in log: {msg}'
                 )
+
+
+class TestLoginContractFixes:
+    """Review 2026-07-21: settings consumption + session-record contract."""
+
+    @staticmethod
+    def _active_user(user_id: object) -> User:
+        return User(
+            id=user_id,  # type: ignore[arg-type]
+            username='testuser',
+            email='test@example.com',
+            password_hash='$argon2id$v=19$m=65536,t=3,p=4$mockhash',
+            status=UserStatus.ACTIVE,
+        )
+
+    async def _login_ok(
+        self,
+        auth_service: AuthService,
+        **kwargs: object,
+    ) -> object:
+        args: dict[str, object] = {
+            'email': 'test@example.com',
+            'password': 'StrongPass1!',
+            'client_ip': '127.0.0.1',
+        }
+        args.update(kwargs)
+        with patch(
+            'questr.domains.users.service.verify_password', return_value=True
+        ):
+            return await auth_service.login(**args)  # type: ignore[arg-type]
+
+    @pytest.mark.asyncio
+    async def test_login_reads_lifetimes_from_settings(
+        self,
+        auth_service: AuthService,
+        mock_user_repo: MagicMock,
+        mock_session_repo: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Review Issue 1: session lifetimes come from settings."""
+        monkeypatch.setattr(settings, 'SESSION_IDLE_MINUTES', 5)
+        monkeypatch.setattr(settings, 'SESSION_ABSOLUTE_HOURS', 1)
+        monkeypatch.setattr(settings, 'SESSION_REMEMBER_DAYS', 2)
+        mock_user_repo.get_by_email.return_value = self._active_user(uuid7())
+        mock_session_repo.count_active_for_user.return_value = 0
+
+        await self._login_ok(auth_service)
+        created = mock_session_repo.create.call_args.args[0]
+        assert created.expires_at - created.issued_at == timedelta(minutes=5)
+        assert created.absolute_expires_at - created.issued_at == timedelta(
+            hours=1
+        )
+
+        mock_session_repo.create.reset_mock()
+        await self._login_ok(auth_service, remember_me=True)
+        created = mock_session_repo.create.call_args.args[0]
+        assert created.absolute_expires_at - created.issued_at == timedelta(
+            days=2
+        )
+
+    @pytest.mark.asyncio
+    async def test_login_reads_session_cap_from_settings(
+        self,
+        auth_service: AuthService,
+        mock_user_repo: MagicMock,
+        mock_session_repo: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Review Issue 1: the concurrent-session cap comes from settings."""
+        monkeypatch.setattr(settings, 'MAX_CONCURRENT_SESSIONS', 3)
+        mock_user_repo.get_by_email.return_value = self._active_user(uuid7())
+        mock_session_repo.count_active_for_user.return_value = 3
+
+        with pytest.raises(TooManyActiveSessionsError):
+            await self._login_ok(auth_service)
+
+    @pytest.mark.asyncio
+    async def test_login_persists_user_agent(
+        self,
+        auth_service: AuthService,
+        mock_user_repo: MagicMock,
+        mock_session_repo: MagicMock,
+    ) -> None:
+        """Review Issue 2 / FR-013: the session record stores User-Agent."""
+        mock_user_repo.get_by_email.return_value = self._active_user(uuid7())
+        mock_session_repo.count_active_for_user.return_value = 0
+
+        await self._login_ok(auth_service, user_agent='TestAgent/1.0')
+        created = mock_session_repo.create.call_args.args[0]
+        assert created.user_agent == 'TestAgent/1.0'
+
+    @pytest.mark.asyncio
+    async def test_login_truncates_user_agent_to_512(
+        self,
+        auth_service: AuthService,
+        mock_user_repo: MagicMock,
+        mock_session_repo: MagicMock,
+    ) -> None:
+        """Design §5: over-length User-Agent is truncated (codepoint-safe)."""
+        mock_user_repo.get_by_email.return_value = self._active_user(uuid7())
+        mock_session_repo.count_active_for_user.return_value = 0
+
+        await self._login_ok(auth_service, user_agent='A' * 600)
+        created = mock_session_repo.create.call_args.args[0]
+        assert created.user_agent == 'A' * 512
+
+    @pytest.mark.asyncio
+    async def test_login_stores_valid_ip_as_is(
+        self,
+        auth_service: AuthService,
+        mock_user_repo: MagicMock,
+        mock_session_repo: MagicMock,
+    ) -> None:
+        """Design §5: a parseable IP is stored unchanged."""
+        mock_user_repo.get_by_email.return_value = self._active_user(uuid7())
+        mock_session_repo.count_active_for_user.return_value = 0
+
+        await self._login_ok(auth_service, client_ip='203.0.113.7')
+        created = mock_session_repo.create.call_args.args[0]
+        assert created.ip_address == '203.0.113.7'
+
+    @pytest.mark.asyncio
+    async def test_login_sanitizes_garbage_ip_to_unknown(
+        self,
+        auth_service: AuthService,
+        mock_user_repo: MagicMock,
+        mock_session_repo: MagicMock,
+    ) -> None:
+        """Design §5: a non-IP X-Forwarded-For value becomes 'unknown'."""
+        mock_user_repo.get_by_email.return_value = self._active_user(uuid7())
+        mock_session_repo.count_active_for_user.return_value = 0
+
+        await self._login_ok(auth_service, client_ip='not-an-ip-address')
+        created = mock_session_repo.create.call_args.args[0]
+        assert created.ip_address == 'unknown'

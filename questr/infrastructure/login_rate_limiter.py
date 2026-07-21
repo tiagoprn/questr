@@ -30,8 +30,9 @@ class LoginRateLimiter:
     """Redis-backed rate limiter with per-account lockout + per-IP throttle.
 
     Per-account: sliding window of failure timestamps in a sorted set.
-    When the failure count reaches ``per_account_max_attempts`` the account
-    is locked until the oldest failure ages past the lockout window.
+    When the failure count reaches ``per_account_max_attempts`` a lockout
+    trigger marker is written and the account stays locked for
+    ``lockout_minutes`` from that trigger (FR-006).
 
     Per-IP: sliding window of ALL attempt timestamps. When the count exceeds
     ``per_ip_max_attempts``, further attempts from that IP are rejected.
@@ -61,6 +62,9 @@ class LoginRateLimiter:
 
     def _ip_key(self, ip_key: str) -> str:
         return f'login:ip:{ip_key}'
+
+    def _lockout_key(self, account_key: str) -> str:
+        return f'login:lockout:{account_key}'
 
     async def _safe_call(
         self, method: object, *args: object, **kwargs: object
@@ -106,36 +110,32 @@ class LoginRateLimiter:
             raise RateLimitExceededError('Too many attempts from this IP')
 
         # --- Per-account lockout check ---
-        # Clean entries older than (account_window + lockout_seconds) so
-        # failures are kept long enough to evaluate lockout duration.
-        acct_keep_window = now - (
-            self.per_account_window_seconds + self.lockout_seconds
+        # The lockout is anchored to the trigger marker written by
+        # record_failure() when the threshold was reached, so the lockout
+        # window runs from the trigger (FR-006), not from the oldest
+        # failure in the sliding window.
+        l_key = self._lockout_key(account_key)
+        marker = await self._safe_call(
+            self.redis.zrange, l_key, 0, 0, False, True
         )
-        await self._safe_call(
-            self.redis.zremrangebyscore, a_key, 0, acct_keep_window
-        )
-        acct_count = await self._safe_call(self.redis.zcard, a_key)
-
-        # If enough failures exist within the retention window, check
-        # whether the oldest one is still within the lockout period.
-        if (
-            acct_count is not None
-            and acct_count >= self.per_account_max_attempts
-        ):
-            oldest = await self._safe_call(
-                self.redis.zrange, a_key, 0, 0, False, True
-            )
-            if oldest:
-                oldest_time = oldest[0][1]
-                if now - oldest_time < self.lockout_seconds:
-                    raise RateLimitExceededError(
-                        'Account temporarily locked. Try again later.'
-                    )
-                # Lockout expired — clear failures and allow
-                await self._safe_call(self.redis.delete, a_key)
+        if marker:
+            trigger_time = marker[0][1]
+            if now - trigger_time < self.lockout_seconds:
+                raise RateLimitExceededError(
+                    'Account temporarily locked. Try again later.'
+                )
+            # Lockout expired -- clear the marker and the failures.
+            await self._safe_call(self.redis.delete, l_key)
+            await self._safe_call(self.redis.delete, a_key)
 
     async def record_failure(self, account_key: str, ip_key: str) -> None:
-        """Record a failed attempt in both counters."""
+        """Record a failed attempt in both counters.
+
+        When the per-account in-window failure count reaches the
+        threshold, a lockout trigger marker is written (NX: the first
+        trigger wins, so failures recorded during an active lockout do
+        not extend it).
+        """
         now = time.time()
         a_key = self._account_key(account_key)
         i_key = self._ip_key(ip_key)
@@ -147,10 +147,28 @@ class LoginRateLimiter:
         await self._safe_call(self.redis.zadd, a_key, {member: now})
         await self._safe_call(self.redis.zadd, i_key, {member: now})
 
+        # Count only failures inside the sliding window (FR-006).
+        window_start = now - self.per_account_window_seconds
+        await self._safe_call(
+            self.redis.zremrangebyscore, a_key, 0, window_start
+        )
+        count = await self._safe_call(self.redis.zcard, a_key)
+        if count is not None and count >= self.per_account_max_attempts:
+            await self._safe_call(
+                self.redis.zadd,
+                self._lockout_key(account_key),
+                {'trigger': now},
+                nx=True,
+            )
+
     async def record_success(self, account_key: str) -> None:
         """Reset the per-account failure counter on successful login."""
-        a_key = self._account_key(account_key)
-        await self._safe_call(self.redis.delete, a_key)
+        await self._safe_call(
+            self.redis.delete, self._account_key(account_key)
+        )
+        await self._safe_call(
+            self.redis.delete, self._lockout_key(account_key)
+        )
 
     async def record_ip_attempt(self, ip_key: str) -> None:
         """Record an attempt in the per-IP window only (FR-007).

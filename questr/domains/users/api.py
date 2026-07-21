@@ -91,9 +91,6 @@ class _UserResponse(BaseModel):
     id: UUID
     username: str
     email: str
-    first_name: str
-    last_name: str
-    role: UserRole
     user_status: UserStatus = Field(
         ...,
         alias='status',
@@ -312,6 +309,7 @@ async def resend_verification(
 )
 async def login(
     payload: LoginRequest,
+    request: Request,
     service: T_AuthServiceV2,
     client_ip: T_ClientIP,
 ) -> LoginResponse:
@@ -320,6 +318,7 @@ async def login(
         password=payload.password,
         client_ip=client_ip,
         remember_me=payload.remember_me,
+        user_agent=request.headers.get('user-agent', ''),
     )
     user = result['user']
     session = result['session']
