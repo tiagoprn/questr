@@ -100,6 +100,7 @@ def main() -> None:
     session = AsyncSessionLocal()
     # Inject session into the static sandbox module for type checkers
     import scripts.fast_shell as _sf  # noqa: PLC0415
+
     _sf.session = session
     try:
         namespace = _prepare_namespace(session)

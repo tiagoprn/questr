@@ -36,6 +36,24 @@ class Settings(BaseSettings):
     RATE_LIMIT_RESEND_MAX: int = 3
     RATE_LIMIT_RESEND_WINDOW_HOURS: int = 1
 
+    # Login throttling
+    LOGIN_PER_ACCOUNT_MAX_ATTEMPTS: int = 5
+    LOGIN_PER_ACCOUNT_WINDOW_MINUTES: int = 15
+    LOGIN_LOCKOUT_MINUTES: int = 30
+    LOGIN_PER_IP_MAX_ATTEMPTS: int = 20
+    LOGIN_PER_IP_WINDOW_MINUTES: int = 10
+
+    # Session lifetime
+    SESSION_IDLE_MINUTES: int = 30
+    SESSION_ABSOLUTE_HOURS: int = 8
+    SESSION_REMEMBER_DAYS: int = 30
+
+    # Session caps
+    MAX_CONCURRENT_SESSIONS: int = 10
+
+    # Cookie security
+    SECURE_COOKIE: bool = True
+
     @property
     def app_url(self) -> str:
         return self.APP_URL.rstrip('/')
