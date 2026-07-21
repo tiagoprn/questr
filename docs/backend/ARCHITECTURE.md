@@ -98,11 +98,14 @@ Domain primitives are defined as dataclasses in `repository.py` (the persistence
 
 ```
 questr/
+  app/               # Cross-cutting wiring (middleware, DI, dependencies)
+    middleware.py     # CsrfMiddleware — automatic CSRF enforcement
+    dependencies.py   # FastAPI Depends functions, type alias definitions
   domains/
     users/
       api.py         # HTTP routes + Pydantic schemas + Depends wiring
-      service.py     # AuthService (signup, verify, resend) + domain functions
-      repository.py  # User + EmailVerification domain dataclasses + repositories
+      service.py     # AuthService (signup, verify, resend, login, logout)
+      repository.py  # User + EmailVerification + Session dataclasses + repos
     hello/
       api.py         # Hello endpoint + response schema
       service.py     # HelloService + get_greeting()
@@ -144,6 +147,38 @@ tests/
 ```
 
 ---
+
+### The `app/` Layer: Cross-Cutting Wiring
+
+The `app/` package (at `questr/app/`) is not a domain — it exists for cross-cutting
+concerns that span multiple domains or layer the request lifecycle:
+
+- `middleware.py` — `CsrfMiddleware` (``BaseHTTPMiddleware``) enforces the CSRF
+double-submit + synchronizer token contract on state-changing requests,
+returning direct ``JSONResponse`` 403s (since Starlette middleware raises
+cannot be caught by ``app.add_exception_handler``).
+- `dependencies.py` — shared FastDI type aliases and `Depends()` providers.
+
+**Import rule (TD-007):** ``app/`` MAY import from domain repositories. Domains
+MUST NOT import from ``app/``. This is the reverse of the usual domain dependency
+direction, but it is justified because the middleware needs session data without
+pulling ``AuthService`` into a cross-cutting concern. It violates neither QTR001
+(no ORM import) nor QTR002 (not a cross-domain import).
+
+### Rate Limiters
+
+The project has two distinct rate limiter classes, each serving a different purpose:
+
+| Class | File | Purpose | Fail-closed |
+|---|---|---|---|
+| ``RedisRateLimiter`` | ``infrastructure/rate_limiter.py`` | Resend-verification throttling (existing) | Accidentally (uncaught Redis errors → 500) |
+| ``LoginRateLimiter`` | ``infrastructure/login_rate_limiter.py`` | Per-account lockout + per-IP throttle for login | Deliberately (``RateLimiterUnavailableError`` → 503) |
+
+The ``LoginRateLimiter`` is a dedicated class because login requires:
+(1) two independent counters with different windows (per-account 15 min, per-IP
+10 min), (2) a per-account lockout state machine (5 failures → 30 min lockout),
+(3) reset-on-success, (4) deliberate fail-closed posture. Bolting these onto
+``RedisRateLimiter`` would complicate its interface for all callers.
 
 ## 4. Value Objects
 

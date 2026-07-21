@@ -53,6 +53,25 @@ quote-style = 'single'
 - Use an `entrypoint.sh` script (via `ENTRYPOINT` in `docker compose`) to run migrations before starting the app with `uvicorn`.
 - Use `pg_isready` to verify the database is online before the app starts.
 
+## CSRF Protection
+
+State-changing API endpoints are automatically protected by ``CsrfMiddleware``
+(``questr/app/middleware.py``). The middleware enforces:
+
+1. **Double-submit pattern:** the ``X-CSRF-Token`` header must match the
+   ``csrf_token`` cookie (compared via ``hmac.compare_digest``).
+2. **Synchronizer token:** the SHA-256 hash of the header value must match the
+   server-stored ``csrf_token_hash`` for the current session.
+
+**Automatic enforcement:** the middleware runs on every state-changing request
+without requiring a ``Depends(verify_csrf)`` on individual routes. Safe methods
+(GET, HEAD, OPTIONS) and pre-auth routes (``/login``, ``/signup``,
+``/resend-verification``) are exempt by design.
+
+**Adding a new exempt route:** if a new route must be exempt from CSRF
+enforcement, add its path to ``CsrfMiddleware.EXEMPT_PATHS`` in
+``questr/app/middleware.py`` and document the reason in the commit message.
+
 ## etc
 
 - Whenever UUID is required, use v7. That applies to the whole codebase where an UUID is needed, not exclusively for the database.
