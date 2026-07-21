@@ -27,7 +27,9 @@ def postgres_url() -> Generator[str, None, None]:
 @pytest.fixture(scope='session')
 def redis_url() -> Generator[str, None, None]:
     with RedisContainer('redis:7-alpine') as redis:
-        yield redis.get_connection_url()
+        host = redis.get_container_host_ip()
+        port = redis.get_exposed_port(6379)
+        yield f'redis://{host}:{port}/0'
 
 
 @pytest_asyncio.fixture(scope='session')
