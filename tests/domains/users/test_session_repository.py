@@ -56,18 +56,18 @@ class TestSessionRepository:
     ) -> Session:
         """Build a Session with useful defaults."""
         now = datetime.now(timezone.utc)
-        fields = dict(
-            user_id=user_id,
-            issued_at=now,
-            last_activity=now,
-            expires_at=now + timedelta(minutes=30),
-            absolute_expires_at=now + timedelta(hours=8),
-            remember_me=False,
-            ip_address='127.0.0.1',
-            user_agent='pytest',
-            csrf_token_hash='a' * 64,
-            is_active=True,
-        )
+        fields = {
+            'user_id': user_id,
+            'issued_at': now,
+            'last_activity': now,
+            'expires_at': now + timedelta(minutes=30),
+            'absolute_expires_at': now + timedelta(hours=8),
+            'remember_me': False,
+            'ip_address': '127.0.0.1',
+            'user_agent': 'pytest',
+            'csrf_token_hash': 'a' * 64,
+            'is_active': True,
+        }
         fields.update(kwargs)
         return Session(**fields)
 

@@ -39,18 +39,18 @@ def test_app() -> FastAPI:
 def _make_session(**kwargs: object) -> SessionDomain:
     """Helper to create a SessionDomain with sensible defaults."""
     now = datetime.now(timezone.utc)
-    fields = dict(
-        id=uuid7(),
-        user_id=uuid7(),
-        is_active=True,
-        issued_at=now,
-        last_activity=now,
-        expires_at=now + timedelta(minutes=30),
-        absolute_expires_at=now + timedelta(hours=8),
-        ip_address='127.0.0.1',
-        user_agent='pytest',
-        csrf_token_hash='a' * 64,
-    )
+    fields = {
+        'id': uuid7(),
+        'user_id': uuid7(),
+        'is_active': True,
+        'issued_at': now,
+        'last_activity': now,
+        'expires_at': now + timedelta(minutes=30),
+        'absolute_expires_at': now + timedelta(hours=8),
+        'ip_address': '127.0.0.1',
+        'user_agent': 'pytest',
+        'csrf_token_hash': 'a' * 64,
+    }
     fields.update(kwargs)
     return SessionDomain(**fields)
 
