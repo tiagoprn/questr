@@ -9,19 +9,18 @@
 1. [Strategic Domain Boundaries](#1-strategic-domain-boundaries)
 2. [Three-File Structure](#2-three-file-structure)
 3. [Project Structure](#3-project-structure)
-4. [Value Objects](#4-value-objects)
-5. [Cross-Domain Communication](#5-cross-domain-communication)
-6. [Abstraction Decision Gate](#6-abstraction-decision-gate)
-7. [Testing Philosophy](#7-testing-philosophy)
-8. [Boundaries Without Ceremony](#8-boundaries-without-ceremony)
-9. [Quick Reference & Anti-Patterns](#9-quick-reference--anti-patterns)
-10. [Persistence](#10-persistence)
-11. [Dependencies / DI](#11-dependencies--di)
-12. [Multi-Layer DTOs](#12-multi-layer-dtos)
-13. [App Factory & Lifespan](#13-app-factory--lifespan)
-14. [Settings](#14-settings)
-15. [Database Migrations](#15-database-migrations)
-16. [Lint Rules](#16-lint-rules)
+4. [Cross-Domain Communication](#4-cross-domain-communication)
+5. [Abstraction Decision Gate](#5-abstraction-decision-gate)
+6. [Testing Philosophy](#6-testing-philosophy)
+7. [Boundaries Without Ceremony](#7-boundaries-without-ceremony)
+8. [Quick Reference & Anti-Patterns](#8-quick-reference--anti-patterns)
+9. [Persistence](#9-persistence)
+10. [Dependencies / DI](#10-dependencies--di)
+11. [Multi-Layer DTOs](#11-multi-layer-dtos)
+12. [App Factory & Lifespan](#12-app-factory--lifespan)
+13. [Settings](#13-settings)
+14. [Database Migrations](#14-database-migrations)
+15. [Lint Rules](#15-lint-rules)
 
 ---
 
@@ -36,9 +35,9 @@ Before writing a single line of logic, identify the major business domains. Each
 | `users` | Authentication, user management, email verification |
 | `hello` | Sample domain / health check |
 
-**Rule:** No cross-domain imports between domain modules. A file inside `questr/domains/users/` must not import from `questr/domains/hello/` or any other domain. This is enforced by lint rule **QTR002** (see [Lint Rules](#16-lint-rules)).
+**Rule:** No cross-domain imports between domain modules. A file inside `questr/domains/users/` must not import from `questr/domains/hello/` or any other domain. This is enforced by lint rule **QTR002** (see [Lint Rules](#15-lint-rules)).
 
-**Exception:** `api.py` files (the HTTP adapter layer) may import from `orchestrators/` — see [Cross-Domain Communication](#5-cross-domain-communication).
+**Exception:** `api.py` files (the HTTP adapter layer) may import from `orchestrators/` — see [Cross-Domain Communication](#4-cross-domain-communication).
 
 ---
 
@@ -120,8 +119,6 @@ questr/
   common/            # Shared domain-agnostic types
     enums.py         # UserRole, UserStatus
     exceptions.py    # QuestrException hierarchy
-    value_objects/
-      email.py       # Email value object using email-validator
   api/
     router.py        # Root APIRouter: includes all domain routers
   app/
@@ -180,59 +177,7 @@ The ``LoginRateLimiter`` is a dedicated class because login requires:
 (3) reset-on-success, (4) deliberate fail-closed posture. Bolting these onto
 ``RedisRateLimiter`` would complicate its interface for all callers.
 
-## 4. Value Objects
-
-Value objects are small, simple types that represent single values in your domain. They have no identity — two value objects with the same data are considered equal. Their main purpose is to encapsulate validation and behavior related to that specific value.
-
-**Location:** `common/value_objects/` — shared, domain-agnostic types that any domain can use.
-
-**Example:** `Email` as a value object for user registration using the `email-validator` library for RFC-compliant validation.
-
-```python
-# common/value_objects/email.py
-from email_validator import EmailNotValidError, validate_email
-
-
-class Email:
-    """Email value object using email-validator for RFC-compliant validation."""
-
-    def __init__(self, value: str) -> None:
-        try:
-            result = validate_email(value, check_deliverability=False)
-            self._value = result.normalized
-        except EmailNotValidError as exc:
-            raise ValueError(f'Invalid email address: {value}') from exc
-
-    @property
-    def value(self) -> str:
-        return self._value
-
-    @property
-    def domain(self) -> str:
-        return self._value.split('@')[1]
-
-    @property
-    def local_part(self) -> str:
-        return self._value.split('@')[0]
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Email):
-            return NotImplemented
-        return self._value == other._value
-
-    def __hash__(self) -> int:
-        return hash(self._value)
-```
-
-**Why use value objects?**
-
-- **Validation in one place**: Instead of validating emails in every service or router, the `Email` class handles it with RFC compliance
-- **Self-documenting code**: Functions that take `Email` instead of `str` are clearer
-- **Built-in behavior**: Methods like `domain` and `local_part` live with the data they operate on
-
----
-
-## 5. Cross-Domain Communication
+## 4. Cross-Domain Communication
 
 ### Default Pattern: Orchestrator
 
@@ -265,11 +210,11 @@ The `api.py` can import from `orchestrators/` because `api.py` is an HTTP adapte
 | **Domain Events** | Multiple consumers of a domain fact exist | "User verified → send email + update analytics + trigger campaign" |
 | **Port at Domain Boundary** | External contract pollution is real | "Stripe integration requires `Charge` objects that must not leak into domain" |
 
-> **Forward-looking note:** Future domains may evolve into domain events or boundary ports. When that need arises, apply the [Abstraction Decision Gate](#6-abstraction-decision-gate) below.
+> **Forward-looking note:** Future domains may evolve into domain events or boundary ports. When that need arises, apply the [Abstraction Decision Gate](#5-abstraction-decision-gate) below.
 
 ---
 
-## 6. Abstraction Decision Gate
+## 5. Abstraction Decision Gate
 
 Before introducing any abstraction (interface, use case class, DTO, adapter, or shared module), answer these three questions:
 
@@ -296,7 +241,7 @@ The `BaseEmailService` abstraction is **justified** because:
 
 ---
 
-## 7. Testing Philosophy
+## 6. Testing Philosophy
 
 ### Minimum Requirement
 
@@ -332,13 +277,13 @@ tests/
 
 ---
 
-## 8. Boundaries Without Ceremony
+## 7. Boundaries Without Ceremony
 
 This architecture uses four coherence mechanisms to replace the ceremony of a full layered architecture:
 
 ### 1. Folder-per-domain with no-cross-import lint rules
 
-Each domain lives in its own folder under `domains/`. Lint rule **QTR002** (see [Lint Rules](#16-lint-rules)) prevents cross-domain imports mechanically.
+Each domain lives in its own folder under `domains/`. Lint rule **QTR002** (see [Lint Rules](#15-lint-rules)) prevents cross-domain imports mechanically.
 
 ### 2. Strong types at module contracts
 
@@ -350,7 +295,7 @@ Every feature has at least one behavior test that exercises the full HTTP stack.
 
 ### 4. Lint rules preventing ORM access outside repository files
 
-Lint rule **QTR001** (see [Lint Rules](#16-lint-rules)) prevents `infrastructure.orm.models` from being imported anywhere except `repository.py` files. This enforces the persistence encapsulation boundary mechanically.
+Lint rule **QTR001** (see [Lint Rules](#15-lint-rules)) prevents `infrastructure.orm.models` from being imported anywhere except `repository.py` files. This enforces the persistence encapsulation boundary mechanically.
 
 ### Contrast: Canonical Clean Architecture vs. This Approach
 
@@ -395,11 +340,9 @@ domains/users/repository.py    # Merges: user + email_verification domain types 
 infrastructure/orm/models.py   # Merges: user_orm + email_verification_orm
 infrastructure/email.py        # Merges: email_service_interface + smtp + console impls
 
-# Shared common (1 file)
-common/value_objects/email.py  # Email value object
 ```
 
-**6 files instead of 18.** The savings come from:
+**5 files instead of 18.** The savings come from:
 
 - **No interface files** for repositories (concrete classes are mockable in Python — no interface needed)
 - **No per-use-case files** (group related use cases in one `service.py`)
@@ -419,7 +362,7 @@ common/value_objects/email.py  # Email value object
 
 ---
 
-## 9. Quick Reference & Anti-Patterns
+## 8. Quick Reference & Anti-Patterns
 
 ### Principles Always Apply
 
@@ -452,7 +395,7 @@ common/value_objects/email.py  # Email value object
 
 ---
 
-## 10. Persistence
+## 9. Persistence
 
 The ORM layer uses **SQLAlchemy with `DeclarativeBase`** (SQLAlchemy 2.x style) and modern `Mapped[]` style column definitions. The async engine and session factory live in `infrastructure/orm/base.py`, providing the `get_async_session` dependency used across all repositories. UUIDv7 values are used for primary keys (provided by Python's standard `uuid` module as `uuid7()`).
 
@@ -538,7 +481,7 @@ class UserRepository:
 
 ---
 
-## 11. Dependencies / DI
+## 10. Dependencies / DI
 
 FastAPI's built-in `Depends()` is the only dependency injection mechanism used. Each domain's `api.py` declares its own `Depends()` providers inline. Shared dependencies (e.g., `get_client_ip`) live in `app/dependencies.py`.
 
@@ -592,7 +535,7 @@ async def get_auth_service(
 
 ---
 
-## 12. Multi-Layer DTOs
+## 11. Multi-Layer DTOs
 
 The codebase maintains two representations of data:
 
@@ -611,7 +554,7 @@ The ORM→domain mapping is kept because the domain layer must not know about SQ
 
 ---
 
-## 13. App Factory & Lifespan
+## 12. App Factory & Lifespan
 
 The app factory pattern maps directly to FastAPI. Startup and shutdown resources (database engine and Redis connection pool) are managed through the `lifespan` async context manager.
 
@@ -652,7 +595,7 @@ def create_app() -> FastAPI:
 
 ---
 
-## 14. Settings
+## 13. Settings
 
 Environment-aware configuration via **Pydantic `BaseSettings`** with automatic `.env` file loading.
 
@@ -683,7 +626,7 @@ settings = Settings()
 
 ---
 
-## 15. Database Migrations
+## 14. Database Migrations
 
 Database schema changes are managed with **Alembic**. Migrations are stored in `migrations/`. Alembic is configured in `migrations/env.py` to import `Base` from `questr.infrastructure.orm.base` with async support.
 
@@ -702,7 +645,7 @@ db-downgrade:  ## Rollback last migration
 
 ---
 
-## 16. Lint Rules
+## 15. Lint Rules
 
 Two custom lint rules are enforced via `scripts/lint_custom.py` (run with `uv run python scripts/lint_custom.py`).
 
