@@ -124,22 +124,23 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-class AuthService:
-    def __init__(  # noqa: PLR0913, PLR0917
+class AccountService:
+    """Account lifecycle: signup, email verification, resend.
+
+    deps: user_repo, verification_repo, email_service, rate_limiter.
+    """
+
+    def __init__(
         self,
         user_repo: UserRepository,
         verification_repo: EmailVerificationRepository,
         email_service: BaseEmailService,
         rate_limiter: RedisRateLimiter,
-        session_repo: SessionRepository | None = None,
-        login_rate_limiter: LoginRateLimiter | None = None,
     ) -> None:
         self.user_repo = user_repo
         self.verification_repo = verification_repo
         self.email_service = email_service
         self.rate_limiter = rate_limiter
-        self.session_repo = session_repo
-        self.login_rate_limiter = login_rate_limiter
 
     async def signup(  # noqa: PLR0913,PLR0917
         self,
@@ -254,6 +255,23 @@ class AuthService:
 
         return True
 
+
+class SessionService:
+    """Session lifecycle: login, validate, logout, logout_all.
+
+    deps: user_repo, session_repo, login_rate_limiter.
+    """
+
+    def __init__(
+        self,
+        user_repo: UserRepository,
+        session_repo: SessionRepository,
+        login_rate_limiter: LoginRateLimiter,
+    ) -> None:
+        self.user_repo = user_repo
+        self.session_repo = session_repo
+        self.login_rate_limiter = login_rate_limiter
+
     async def login(  # noqa: PLR0913, PLR0917, PLR0912
         self,
         email: str,
@@ -276,8 +294,7 @@ class AuthService:
             TooManyActiveSessionsError: if >= MAX_CONCURRENT_SESSIONS.
         """
         # Per-IP and per-account lockout check
-        if self.login_rate_limiter is not None:
-            await self.login_rate_limiter.check_login_allowed(email, client_ip)
+        await self.login_rate_limiter.check_login_allowed(email, client_ip)
 
         # User lookup
         user = await self.user_repo.get_by_email(email)
@@ -287,8 +304,7 @@ class AuthService:
             verify_password(password, _DUMMY_HASH)
             # FR-007: every attempt counts toward the per-IP window,
             # even when there is no account to lock out.
-            if self.login_rate_limiter is not None:
-                await self.login_rate_limiter.record_ip_attempt(client_ip)
+            await self.login_rate_limiter.record_ip_attempt(client_ip)
             logger.info(
                 'login_attempt',
                 extra={
@@ -304,8 +320,7 @@ class AuthService:
         if user.status != UserStatus.ACTIVE:
             verify_password(password, user.password_hash)
             # FR-007: account-state rejections still count per-IP.
-            if self.login_rate_limiter is not None:
-                await self.login_rate_limiter.record_ip_attempt(client_ip)
+            await self.login_rate_limiter.record_ip_attempt(client_ip)
             logger.info(
                 'login_attempt',
                 extra={
@@ -326,8 +341,7 @@ class AuthService:
 
         # Password verify
         if not verify_password(password, user.password_hash):
-            if self.login_rate_limiter is not None:
-                await self.login_rate_limiter.record_failure(email, client_ip)
+            await self.login_rate_limiter.record_failure(email, client_ip)
             logger.info(
                 'login_attempt',
                 extra={
@@ -339,22 +353,21 @@ class AuthService:
             raise AuthenticationError('Invalid email or password')
 
         # Concurrent-session cap check
-        if self.session_repo is not None:
-            active = await self.session_repo.count_active_for_user(user.id)
-            if active >= settings.MAX_CONCURRENT_SESSIONS:
-                logger.info(
-                    'login_attempt',
-                    extra={
-                        'result': 'too_many_sessions',
-                        'error_code': None,
-                        'account_lookup_done': True,
-                    },
-                )
-                raise TooManyActiveSessionsError(
-                    'Maximum active sessions reached. '
-                    'Log out from another device first, '
-                    "or use 'Log out everywhere'."
-                )
+        active = await self.session_repo.count_active_for_user(user.id)
+        if active >= settings.MAX_CONCURRENT_SESSIONS:
+            logger.info(
+                'login_attempt',
+                extra={
+                    'result': 'too_many_sessions',
+                    'error_code': None,
+                    'account_lookup_done': True,
+                },
+            )
+            raise TooManyActiveSessionsError(
+                'Maximum active sessions reached. '
+                'Log out from another device first, '
+                "or use 'Log out everywhere'."
+            )
 
         # Mint CSRF token
         csrf_raw = secrets.token_urlsafe(32)
@@ -373,28 +386,24 @@ class AuthService:
         expires_at = now + timedelta(minutes=settings.SESSION_IDLE_MINUTES)
 
         # Create session record (design §5: IP/UA sanitized pre-persist)
-        if self.session_repo is not None:
-            session = Session(
-                user_id=user.id,
-                issued_at=now,
-                last_activity=now,
-                expires_at=expires_at,
-                absolute_expires_at=absolute_expires_at,
-                remember_me=remember_me,
-                ip_address=sanitize_ip(client_ip),
-                user_agent=user_agent[:512],
-                csrf_token_hash=csrf_hash,
-                is_active=True,
-            )
-            created_session = await self.session_repo.create(session)
-        else:
-            created_session = None
+        session = Session(
+            user_id=user.id,
+            issued_at=now,
+            last_activity=now,
+            expires_at=expires_at,
+            absolute_expires_at=absolute_expires_at,
+            remember_me=remember_me,
+            ip_address=sanitize_ip(client_ip),
+            user_agent=user_agent[:512],
+            csrf_token_hash=csrf_hash,
+            is_active=True,
+        )
+        created_session = await self.session_repo.create(session)
 
         # Reset failure counter on success; the attempt itself still
         # counts toward the per-IP window (FR-007).
-        if self.login_rate_limiter is not None:
-            await self.login_rate_limiter.record_success(email)
-            await self.login_rate_limiter.record_ip_attempt(client_ip)
+        await self.login_rate_limiter.record_success(email)
+        await self.login_rate_limiter.record_ip_attempt(client_ip)
 
         logger.info(
             'login_attempt',
@@ -421,9 +430,6 @@ class AuthService:
         Raises:
             AuthenticationError: if session is invalid or expired.
         """
-        if self.session_repo is None:
-            raise AuthenticationError('Session service unavailable')
-
         session = await self.session_repo.get_by_id(session_id)
         if session is None or not session.is_active:
             raise AuthenticationError('Not authenticated')
@@ -457,14 +463,11 @@ class AuthService:
 
     async def logout(self, session_id: UUID) -> None:
         """Deactivate the current session."""
-        if self.session_repo is not None:
-            await self.session_repo.deactivate(session_id)
+        await self.session_repo.deactivate(session_id)
 
     async def logout_all(self, user_id: UUID) -> int:
         """Revoke all active sessions for the given user.
 
         Returns the number of revoked sessions.
         """
-        if self.session_repo is not None:
-            return await self.session_repo.revoke_all_for_user(user_id)
-        return 0
+        return await self.session_repo.revoke_all_for_user(user_id)

@@ -14,7 +14,7 @@ from questr.domains.users.repository import (
     SessionRepository,
     UserRepository,
 )
-from questr.domains.users.service import AuthService
+from questr.domains.users.service import AccountService, SessionService
 from questr.infrastructure.email import (
     BaseEmailService,
     get_email_service,
@@ -142,7 +142,7 @@ async def get_verification_repository(
     return EmailVerificationRepository(session)
 
 
-async def get_auth_service(
+async def get_account_service(
     user_repo: Annotated[UserRepository, Depends(get_user_repository)],
     verification_repo: Annotated[
         EmailVerificationRepository,
@@ -150,8 +150,8 @@ async def get_auth_service(
     ],
     email_service: Annotated[BaseEmailService, Depends(get_email_service)],
     rate_limiter: Annotated[RedisRateLimiter, Depends(get_rate_limiter)],
-) -> AuthService:
-    return AuthService(
+) -> AccountService:
+    return AccountService(
         user_repo=user_repo,
         verification_repo=verification_repo,
         email_service=email_service,
@@ -164,7 +164,7 @@ T_VerificationRepo = Annotated[
     EmailVerificationRepository,
     Depends(get_verification_repository),
 ]
-T_AuthService = Annotated[AuthService, Depends(get_auth_service)]
+T_AccountService = Annotated[AccountService, Depends(get_account_service)]
 
 
 async def get_session_repository(
@@ -179,37 +179,28 @@ T_LoginRateLimiter = Annotated[
 ]
 
 
-async def get_auth_service_v2(  # noqa: PLR0913, PLR0917
+async def get_session_service(
     user_repo: Annotated[UserRepository, Depends(get_user_repository)],
-    verification_repo: Annotated[
-        EmailVerificationRepository,
-        Depends(get_verification_repository),
-    ],
-    email_service: Annotated[BaseEmailService, Depends(get_email_service)],
-    rate_limiter: Annotated[RedisRateLimiter, Depends(get_rate_limiter)],
     session_repo: Annotated[
         SessionRepository, Depends(get_session_repository)
     ],
     login_rate_limiter: Annotated[
         LoginRateLimiter, Depends(get_login_rate_limiter)
     ],
-) -> AuthService:
-    return AuthService(
+) -> SessionService:
+    return SessionService(
         user_repo=user_repo,
-        verification_repo=verification_repo,
-        email_service=email_service,
-        rate_limiter=rate_limiter,
         session_repo=session_repo,
         login_rate_limiter=login_rate_limiter,
     )
 
 
-T_AuthServiceV2 = Annotated[AuthService, Depends(get_auth_service_v2)]
+T_SessionService = Annotated[SessionService, Depends(get_session_service)]
 
 
 async def get_current_user(
     request: Request,
-    auth_service: T_AuthServiceV2,
+    session_service: T_SessionService,
     db_session: Annotated[AsyncSession, Depends(get_async_session)],
 ) -> dict:
     """Extract session from cookie and return user + CSRF token."""
@@ -221,7 +212,7 @@ async def get_current_user(
     except ValueError:
         raise AuthenticationError('Not authenticated') from None
     try:
-        user = await auth_service.validate_session(session_uuid)
+        user = await session_service.validate_session(session_uuid)
     except AuthenticationError:
         # FR-005: persist the expired-session invalidation. On the
         # exception path the get_async_session teardown commit is
@@ -233,6 +224,9 @@ async def get_current_user(
     # re-echoes it from the session. We rely on the cookie.
     csrf_token = request.cookies.get('csrf_token', '')
     return {'user': user, 'csrf_token': csrf_token}
+
+
+T_CurrentUser = Annotated[dict, Depends(get_current_user)]
 
 
 # ── Routes ────────────────────────────────────────────────────────────
@@ -249,7 +243,7 @@ async def get_current_user(
 )
 async def signup(
     payload: SignupRequest,
-    service: T_AuthService,
+    service: T_AccountService,
     client_ip: T_ClientIP,
 ) -> SignupResponse:
     user = await service.signup(
@@ -273,7 +267,7 @@ async def signup(
 )
 async def verify_email(
     token: str,
-    service: T_AuthService,
+    service: T_AccountService,
 ) -> VerifyEmailResponse:
     user = await service.verify_email(token)
     return VerifyEmailResponse.model_validate(user)
@@ -288,7 +282,7 @@ async def verify_email(
 )
 async def resend_verification(
     payload: ResendVerificationRequest,
-    service: T_AuthService,
+    service: T_AccountService,
     client_ip: T_ClientIP,
 ) -> ResendVerificationResponse:
     await service.resend_verification(email=payload.email, client_ip=client_ip)
@@ -310,7 +304,7 @@ async def resend_verification(
 async def login(
     payload: LoginRequest,
     request: Request,
-    service: T_AuthServiceV2,
+    service: T_SessionService,
     client_ip: T_ClientIP,
 ) -> LoginResponse:
     result = await service.login(
@@ -369,8 +363,8 @@ async def login(
 )
 async def logout(
     request: Request,
-    service: T_AuthServiceV2,
-    _current: Annotated[dict, Depends(get_current_user)],
+    service: T_SessionService,
+    _current: T_CurrentUser,
 ) -> LogoutResponse:
     # get_current_user guarantees a syntactically valid session cookie.
     session_uuid = UUID(request.cookies['session_id'])
@@ -407,8 +401,8 @@ async def logout(
     },
 )
 async def logout_all(
-    service: T_AuthServiceV2,
-    current: Annotated[dict, Depends(get_current_user)],
+    service: T_SessionService,
+    current: T_CurrentUser,
 ) -> LogoutAllResponse:
     user = current['user']
     revoked = await service.logout_all(user.id)
@@ -447,7 +441,7 @@ async def logout_all(
     },
 )
 async def me(
-    current: Annotated[dict, Depends(get_current_user)],
+    current: T_CurrentUser,
 ) -> MeResponse:
     return MeResponse(
         user=_UserResponse.model_validate(current['user']),

@@ -16,8 +16,8 @@ from questr.common.exceptions import (
     EmailNotVerifiedError,
     TooManyActiveSessionsError,
 )
-from questr.domains.users.api import get_auth_service_v2
-from questr.domains.users.service import AuthService
+from questr.domains.users.api import get_session_service
+from questr.domains.users.service import SessionService
 from questr.infrastructure.email import (
     BaseEmailService,
     get_email_service,
@@ -172,9 +172,9 @@ class TestResendVerification:
 
 
 @pytest.fixture
-def mock_login_service() -> AuthService:
-    """Return a mock AuthService that succeeds for login."""
-    svc = MagicMock(spec=AuthService)
+def mock_login_service() -> SessionService:
+    """Return a mock SessionService that succeeds for login."""
+    svc = MagicMock(spec=SessionService)
     svc.login = AsyncMock(
         return_value={
             'user': {
@@ -207,10 +207,10 @@ class TestLogin:
         self,
         app: FastAPI,
         client: AsyncClient,
-        mock_login_service: AuthService,
+        mock_login_service: SessionService,
     ) -> None:
         """AC-1: Login 200 body matches design Section 6."""
-        overrides = {get_auth_service_v2: lambda: mock_login_service}
+        overrides = {get_session_service: lambda: mock_login_service}
         app.dependency_overrides.update(overrides)
 
         resp = await client.post(
@@ -234,10 +234,10 @@ class TestLogin:
         self,
         app: FastAPI,
         client: AsyncClient,
-        mock_login_service: AuthService,
+        mock_login_service: SessionService,
     ) -> None:
         """AC-1: Login response excludes prohibited fields."""
-        overrides = {get_auth_service_v2: lambda: mock_login_service}
+        overrides = {get_session_service: lambda: mock_login_service}
         app.dependency_overrides.update(overrides)
 
         resp = await client.post(
@@ -276,9 +276,9 @@ class TestLogin:
         expected_code: str | None,
     ) -> None:
         """AC-5: Failures map to structured responses."""
-        svc = MagicMock(spec=AuthService)
+        svc = MagicMock(spec=SessionService)
         svc.login = AsyncMock(side_effect=exception)
-        overrides = {get_auth_service_v2: lambda: svc}
+        overrides = {get_session_service: lambda: svc}
         app.dependency_overrides.update(overrides)
 
         resp = await client.post(
@@ -301,9 +301,9 @@ class TestLogout:
         client: AsyncClient,
     ) -> None:
         """AC-3: Logout clears cookies with matching paths."""
-        svc = MagicMock(spec=AuthService)
+        svc = MagicMock(spec=SessionService)
         svc.logout = AsyncMock()
-        overrides = {get_auth_service_v2: lambda: svc}
+        overrides = {get_session_service: lambda: svc}
         app.dependency_overrides.update(overrides)
 
         client.cookies['session_id'] = str(uuid7())
@@ -320,9 +320,9 @@ class TestLogout:
         client: AsyncClient,
     ) -> None:
         """AC-3: Logout-all returns the revoked count."""
-        svc = MagicMock(spec=AuthService)
+        svc = MagicMock(spec=SessionService)
         svc.logout_all = AsyncMock(return_value=3)
-        overrides = {get_auth_service_v2: lambda: svc}
+        overrides = {get_session_service: lambda: svc}
         app.dependency_overrides.update(overrides)
 
         client.cookies['session_id'] = str(uuid7())
@@ -343,8 +343,8 @@ class TestGetCurrentUser:
     ) -> None:
         """AC-4: Missing cookie yields 401."""
 
-        svc = MagicMock(spec=AuthService)
-        overrides = {get_auth_service_v2: lambda: svc}
+        svc = MagicMock(spec=SessionService)
+        overrides = {get_session_service: lambda: svc}
         app.dependency_overrides.update(overrides)
 
         resp = await client.get('/api/v1/auth/me')
@@ -357,8 +357,8 @@ class TestGetCurrentUser:
         client: AsyncClient,
     ) -> None:
         """AC-4: Malformed cookie yields 401 (never 500)."""
-        svc = MagicMock(spec=AuthService)
-        overrides = {get_auth_service_v2: lambda: svc}
+        svc = MagicMock(spec=SessionService)
+        overrides = {get_session_service: lambda: svc}
         app.dependency_overrides.update(overrides)
 
         client.cookies['session_id'] = 'not-a-uuid'
@@ -382,9 +382,9 @@ class TestGetCurrentUser:
             status=UserStatus.ACTIVE,
             created_at=datetime.now(timezone.utc),
         )
-        svc = MagicMock(spec=AuthService)
+        svc = MagicMock(spec=SessionService)
         svc.validate_session = AsyncMock(return_value=mock_user)
-        overrides = {get_auth_service_v2: lambda: svc}
+        overrides = {get_session_service: lambda: svc}
         app.dependency_overrides.update(overrides)
 
         client.cookies['session_id'] = str(uuid7())

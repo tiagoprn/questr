@@ -19,7 +19,12 @@ from questr.common.exceptions import (
     UserAlreadyExistsError,
 )
 from questr.domains.users.repository import Session as SessionDomain
-from questr.domains.users.service import AuthService, EmailVerification, User
+from questr.domains.users.service import (
+    AccountService,
+    EmailVerification,
+    SessionService,
+    User,
+)
 from questr.settings import settings
 
 
@@ -81,19 +86,28 @@ def mock_login_rate_limiter() -> MagicMock:
 
 
 @pytest.fixture
-def auth_service(
+def account_service(
     mock_user_repo: MagicMock,
     mock_verification_repo: MagicMock,
     mock_email_service: MagicMock,
     mock_rate_limiter: MagicMock,
-    mock_session_repo: MagicMock,
-    mock_login_rate_limiter: MagicMock,
-) -> AuthService:
-    return AuthService(
+) -> AccountService:
+    return AccountService(
         user_repo=mock_user_repo,
         verification_repo=mock_verification_repo,
         email_service=mock_email_service,
         rate_limiter=mock_rate_limiter,
+    )
+
+
+@pytest.fixture
+def session_service(
+    mock_user_repo: MagicMock,
+    mock_session_repo: MagicMock,
+    mock_login_rate_limiter: MagicMock,
+) -> SessionService:
+    return SessionService(
+        user_repo=mock_user_repo,
         session_repo=mock_session_repo,
         login_rate_limiter=mock_login_rate_limiter,
     )
@@ -103,7 +117,7 @@ class TestSignup:
     @pytest.mark.asyncio
     async def test_creates_user_and_sends_email(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
         mock_user_repo: MagicMock,
         mock_verification_repo: MagicMock,
         mock_email_service: MagicMock,
@@ -127,7 +141,7 @@ class TestSignup:
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
         )
 
-        result = await auth_service.signup(
+        result = await account_service.signup(
             username='TestUser',
             email='test@example.com',
             first_name='Test',
@@ -145,7 +159,7 @@ class TestSignup:
     @pytest.mark.asyncio
     async def test_raises_on_duplicate_username(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
         mock_user_repo: MagicMock,
     ) -> None:
         mock_user_repo.get_by_username.return_value = User(
@@ -153,7 +167,7 @@ class TestSignup:
         )
 
         with pytest.raises(UserAlreadyExistsError):
-            await auth_service.signup(
+            await account_service.signup(
                 username='testuser',
                 email='new@example.com',
                 first_name='Test',
@@ -166,7 +180,7 @@ class TestSignup:
     @pytest.mark.asyncio
     async def test_raises_on_duplicate_email(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
         mock_user_repo: MagicMock,
     ) -> None:
         mock_user_repo.get_by_username.return_value = None
@@ -175,7 +189,7 @@ class TestSignup:
         )
 
         with pytest.raises(UserAlreadyExistsError):
-            await auth_service.signup(
+            await account_service.signup(
                 username='newuser',
                 email='test@example.com',
                 first_name='Test',
@@ -188,7 +202,7 @@ class TestSignup:
     @pytest.mark.asyncio
     async def test_plus_tag_emails_are_distinct(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
         mock_user_repo: MagicMock,
     ) -> None:
         """Two emails with same base but different + tags are distinct."""
@@ -210,7 +224,7 @@ class TestSignup:
         )
 
         # Act: signup with tag1 succeeds
-        await auth_service.signup(
+        await account_service.signup(
             username='plususer1',
             email='base+tag1@example.com',
             first_name='Plus',
@@ -237,7 +251,7 @@ class TestSignup:
             status=UserStatus.PENDING,
         )
 
-        await auth_service.signup(
+        await account_service.signup(
             username='plususer2',
             email='base+tag2@example.com',
             first_name='Plus',
@@ -251,10 +265,10 @@ class TestSignup:
     @pytest.mark.asyncio
     async def test_raises_on_password_mismatch(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
     ) -> None:
         with pytest.raises(ValueError, match='Passwords do not match'):
-            await auth_service.signup(
+            await account_service.signup(
                 username='testuser',
                 email='test@example.com',
                 first_name='Test',
@@ -267,10 +281,10 @@ class TestSignup:
     @pytest.mark.asyncio
     async def test_raises_on_weak_password(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
     ) -> None:
         with pytest.raises(ValueError):  # noqa: PT011
-            await auth_service.signup(
+            await account_service.signup(
                 username='testuser',
                 email='test@example.com',
                 first_name='Test',
@@ -285,7 +299,7 @@ class TestVerifyEmail:
     @pytest.mark.asyncio
     async def test_activates_user_on_valid_token(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
         mock_verification_repo: MagicMock,
         mock_user_repo: MagicMock,
     ) -> None:
@@ -306,7 +320,7 @@ class TestVerifyEmail:
             status=UserStatus.ACTIVE,
         )
 
-        result = await auth_service.verify_email('raw_token')
+        result = await account_service.verify_email('raw_token')
 
         assert result.status == UserStatus.ACTIVE
         mock_user_repo.update_status.assert_called_once_with(
@@ -316,18 +330,18 @@ class TestVerifyEmail:
     @pytest.mark.asyncio
     async def test_raises_on_invalid_token(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
         mock_verification_repo: MagicMock,
     ) -> None:
         mock_verification_repo.get_by_token_hash.return_value = None
 
         with pytest.raises(InvalidVerificationTokenError):
-            await auth_service.verify_email('invalid_token')
+            await account_service.verify_email('invalid_token')
 
     @pytest.mark.asyncio
     async def test_raises_on_used_token(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
         mock_verification_repo: MagicMock,
     ) -> None:
         mock_verification_repo.get_by_token_hash.return_value = (
@@ -341,12 +355,12 @@ class TestVerifyEmail:
         )
 
         with pytest.raises(InvalidVerificationTokenError):
-            await auth_service.verify_email('used_token')
+            await account_service.verify_email('used_token')
 
     @pytest.mark.asyncio
     async def test_raises_on_expired_token(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
         mock_verification_repo: MagicMock,
     ) -> None:
         mock_verification_repo.get_by_token_hash.return_value = (
@@ -359,14 +373,14 @@ class TestVerifyEmail:
         )
 
         with pytest.raises(InvalidVerificationTokenError):
-            await auth_service.verify_email('expired_token')
+            await account_service.verify_email('expired_token')
 
 
 class TestResendVerification:
     @pytest.mark.asyncio
     async def test_creates_new_token_and_deletes_old(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
         mock_rate_limiter: MagicMock,
         mock_user_repo: MagicMock,
         mock_verification_repo: MagicMock,
@@ -386,7 +400,7 @@ class TestResendVerification:
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
         )
 
-        result = await auth_service.resend_verification(
+        result = await account_service.resend_verification(
             email='test@example.com', client_ip='127.0.0.1'
         )
 
@@ -397,26 +411,26 @@ class TestResendVerification:
     @pytest.mark.asyncio
     async def test_raises_on_rate_limit(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
         mock_rate_limiter: MagicMock,
     ) -> None:
         mock_rate_limiter.is_allowed.return_value = False
 
         with pytest.raises(RateLimitExceededError):
-            await auth_service.resend_verification(
+            await account_service.resend_verification(
                 email='test@example.com', client_ip='127.0.0.1'
             )
 
     @pytest.mark.asyncio
     async def test_returns_true_for_unknown_email(
         self,
-        auth_service: AuthService,
+        account_service: AccountService,
         mock_rate_limiter: MagicMock,
         mock_user_repo: MagicMock,
     ) -> None:
         mock_user_repo.get_by_email.return_value = None
 
-        result = await auth_service.resend_verification(
+        result = await account_service.resend_verification(
             email='unknown@example.com', client_ip='127.0.0.1'
         )
 
@@ -424,12 +438,12 @@ class TestResendVerification:
 
 
 class TestLogin:
-    """Tests for AuthService.login()."""
+    """Tests for SessionService.login()."""
 
     @pytest.mark.asyncio
     async def test_login_success_returns_session_and_csrf_token(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_session_repo: MagicMock,
         mock_login_rate_limiter: MagicMock,
@@ -458,7 +472,7 @@ class TestLogin:
         with patch(
             'questr.domains.users.service.verify_password', return_value=True
         ):
-            result = await auth_service.login(
+            result = await session_service.login(
                 email='test@example.com',
                 password='StrongPass1!',
                 client_ip='127.0.0.1',
@@ -474,14 +488,14 @@ class TestLogin:
     @pytest.mark.asyncio
     async def test_login_unknown_email_runs_dummy_verify_raises_generic(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
     ) -> None:
         """AC-2: Unknown email -> dummy verify + generic 401."""
         mock_user_repo.get_by_email.return_value = None
 
         with pytest.raises(AuthenticationError):
-            await auth_service.login(
+            await session_service.login(
                 email='unknown@example.com',
                 password='StrongPass1!',
                 client_ip='127.0.0.1',
@@ -490,7 +504,7 @@ class TestLogin:
     @pytest.mark.asyncio
     async def test_login_wrong_password_increments_failures_raises_generic(  # noqa: E501
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_login_rate_limiter: MagicMock,
     ) -> None:
@@ -505,7 +519,7 @@ class TestLogin:
         mock_user_repo.get_by_email.return_value = user
 
         with pytest.raises(AuthenticationError):
-            await auth_service.login(
+            await session_service.login(
                 email='test@example.com',
                 password='WrongPass1!',
                 client_ip='127.0.0.1',
@@ -516,7 +530,7 @@ class TestLogin:
     @pytest.mark.asyncio
     async def test_login_unknown_email_records_ip_attempt(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_login_rate_limiter: MagicMock,
     ) -> None:
@@ -524,7 +538,7 @@ class TestLogin:
         mock_user_repo.get_by_email.return_value = None
 
         with pytest.raises(AuthenticationError):
-            await auth_service.login(
+            await session_service.login(
                 email='unknown@example.com',
                 password='StrongPass1!',
                 client_ip='127.0.0.1',
@@ -538,7 +552,7 @@ class TestLogin:
     @pytest.mark.asyncio
     async def test_login_success_records_ip_attempt(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_session_repo: MagicMock,
         mock_login_rate_limiter: MagicMock,
@@ -563,7 +577,7 @@ class TestLogin:
         with patch(
             'questr.domains.users.service.verify_password', return_value=True
         ):
-            await auth_service.login(
+            await session_service.login(
                 email='test@example.com',
                 password='StrongPass1!',
                 client_ip='127.0.0.1',
@@ -585,7 +599,7 @@ class TestLogin:
     @pytest.mark.asyncio
     async def test_login_non_active_status_raises_structured(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         status: UserStatus,
         expected: type,
@@ -601,7 +615,7 @@ class TestLogin:
         mock_user_repo.get_by_email.return_value = user
 
         with pytest.raises(expected):
-            await auth_service.login(
+            await session_service.login(
                 email='test@example.com',
                 password='StrongPass1!',
                 client_ip='127.0.0.1',
@@ -610,7 +624,7 @@ class TestLogin:
     @pytest.mark.asyncio
     async def test_login_locked_account_rejects_without_verify(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_login_rate_limiter: MagicMock,
     ) -> None:
@@ -620,7 +634,7 @@ class TestLogin:
         )
 
         with pytest.raises(RateLimitExceededError):
-            await auth_service.login(
+            await session_service.login(
                 email='test@example.com',
                 password='StrongPass1!',
                 client_ip='127.0.0.1',
@@ -631,7 +645,7 @@ class TestLogin:
     @pytest.mark.asyncio
     async def test_login_eleventh_session_raises_too_many_active(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_session_repo: MagicMock,
     ) -> None:
@@ -650,7 +664,7 @@ class TestLogin:
             'questr.domains.users.service.verify_password', return_value=True
         ):
             with pytest.raises(TooManyActiveSessionsError):
-                await auth_service.login(
+                await session_service.login(
                     email='test@example.com',
                     password='StrongPass1!',
                     client_ip='127.0.0.1',
@@ -658,12 +672,12 @@ class TestLogin:
 
 
 class TestValidateSession:
-    """Tests for AuthService.validate_session()."""
+    """Tests for SessionService.validate_session()."""
 
     @pytest.mark.asyncio
     async def test_validate_session_writes_last_activity_eagerly(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_session_repo: MagicMock,
         mock_user_repo: MagicMock,
     ) -> None:
@@ -688,7 +702,7 @@ class TestValidateSession:
             id=user_id, username='testuser'
         )
 
-        result = await auth_service.validate_session(session_id)
+        result = await session_service.validate_session(session_id)
 
         assert result is not None
         mock_session_repo.update_last_activity.assert_called_once()
@@ -699,7 +713,7 @@ class TestValidateSession:
     @pytest.mark.asyncio
     async def test_validate_session_idle_expired_deactivates_raises(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_session_repo: MagicMock,
     ) -> None:
         """AC-5: Idle expiry deactivates session and raises."""
@@ -718,14 +732,14 @@ class TestValidateSession:
         mock_session_repo.get_by_id.return_value = session
 
         with pytest.raises(AuthenticationError):
-            await auth_service.validate_session(session.id)
+            await session_service.validate_session(session.id)
 
         mock_session_repo.deactivate.assert_called_once_with(session.id)
 
     @pytest.mark.asyncio
     async def test_validate_session_absolute_expired_deactivates_raises(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_session_repo: MagicMock,
     ) -> None:
         """AC-5: Absolute expiry deactivates session and raises."""
@@ -744,38 +758,38 @@ class TestValidateSession:
         mock_session_repo.get_by_id.return_value = session
 
         with pytest.raises(AuthenticationError):
-            await auth_service.validate_session(session.id)
+            await session_service.validate_session(session.id)
 
         mock_session_repo.deactivate.assert_called_once_with(session.id)
 
 
 class TestLogout:
-    """Tests for AuthService.logout() and logout_all()."""
+    """Tests for SessionService.logout() and logout_all()."""
 
     @pytest.mark.asyncio
     async def test_logout_deactivates_only_current_session(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_session_repo: MagicMock,
     ) -> None:
         """AC-6: logout invalidates only the current session."""
         session_id = uuid7()
 
-        await auth_service.logout(session_id)
+        await session_service.logout(session_id)
 
         mock_session_repo.deactivate.assert_called_once_with(session_id)
 
     @pytest.mark.asyncio
     async def test_logout_all_revokes_all_and_returns_count(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_session_repo: MagicMock,
     ) -> None:
         """AC-6: logout_all revokes every active session, returns count."""
         user_id = uuid7()
         mock_session_repo.revoke_all_for_user.return_value = 5
 
-        count = await auth_service.logout_all(user_id)
+        count = await session_service.logout_all(user_id)
 
         assert count == 5
         mock_session_repo.revoke_all_for_user.assert_called_once_with(user_id)
@@ -783,7 +797,7 @@ class TestLogout:
     @pytest.mark.asyncio
     async def test_auth_logs_contain_only_allowed_keys(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         caplog: object,
     ) -> None:
@@ -794,7 +808,7 @@ class TestLogout:
         mock_user_repo.get_by_email.return_value = None
 
         with pytest.raises(AuthenticationError):
-            await auth_service.login(
+            await session_service.login(
                 email='test@example.com',
                 password='StrongPass1!',
                 client_ip='127.0.0.1',
@@ -835,7 +849,7 @@ class TestLoginContractFixes:
 
     async def _login_ok(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         **kwargs: object,
     ) -> object:
         args: dict[str, object] = {
@@ -847,12 +861,12 @@ class TestLoginContractFixes:
         with patch(
             'questr.domains.users.service.verify_password', return_value=True
         ):
-            return await auth_service.login(**args)  # type: ignore[arg-type]
+            return await session_service.login(**args)  # type: ignore[arg-type]
 
     @pytest.mark.asyncio
     async def test_login_reads_lifetimes_from_settings(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_session_repo: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
@@ -864,7 +878,7 @@ class TestLoginContractFixes:
         mock_user_repo.get_by_email.return_value = self._active_user(uuid7())
         mock_session_repo.count_active_for_user.return_value = 0
 
-        await self._login_ok(auth_service)
+        await self._login_ok(session_service)
         created = mock_session_repo.create.call_args.args[0]
         assert created.expires_at - created.issued_at == timedelta(minutes=5)
         assert created.absolute_expires_at - created.issued_at == timedelta(
@@ -872,7 +886,7 @@ class TestLoginContractFixes:
         )
 
         mock_session_repo.create.reset_mock()
-        await self._login_ok(auth_service, remember_me=True)
+        await self._login_ok(session_service, remember_me=True)
         created = mock_session_repo.create.call_args.args[0]
         assert created.absolute_expires_at - created.issued_at == timedelta(
             days=2
@@ -881,7 +895,7 @@ class TestLoginContractFixes:
     @pytest.mark.asyncio
     async def test_login_reads_session_cap_from_settings(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_session_repo: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
@@ -892,12 +906,12 @@ class TestLoginContractFixes:
         mock_session_repo.count_active_for_user.return_value = 3
 
         with pytest.raises(TooManyActiveSessionsError):
-            await self._login_ok(auth_service)
+            await self._login_ok(session_service)
 
     @pytest.mark.asyncio
     async def test_login_persists_user_agent(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_session_repo: MagicMock,
     ) -> None:
@@ -905,14 +919,14 @@ class TestLoginContractFixes:
         mock_user_repo.get_by_email.return_value = self._active_user(uuid7())
         mock_session_repo.count_active_for_user.return_value = 0
 
-        await self._login_ok(auth_service, user_agent='TestAgent/1.0')
+        await self._login_ok(session_service, user_agent='TestAgent/1.0')
         created = mock_session_repo.create.call_args.args[0]
         assert created.user_agent == 'TestAgent/1.0'
 
     @pytest.mark.asyncio
     async def test_login_truncates_user_agent_to_512(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_session_repo: MagicMock,
     ) -> None:
@@ -920,14 +934,14 @@ class TestLoginContractFixes:
         mock_user_repo.get_by_email.return_value = self._active_user(uuid7())
         mock_session_repo.count_active_for_user.return_value = 0
 
-        await self._login_ok(auth_service, user_agent='A' * 600)
+        await self._login_ok(session_service, user_agent='A' * 600)
         created = mock_session_repo.create.call_args.args[0]
         assert created.user_agent == 'A' * 512
 
     @pytest.mark.asyncio
     async def test_login_stores_valid_ip_as_is(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_session_repo: MagicMock,
     ) -> None:
@@ -935,14 +949,14 @@ class TestLoginContractFixes:
         mock_user_repo.get_by_email.return_value = self._active_user(uuid7())
         mock_session_repo.count_active_for_user.return_value = 0
 
-        await self._login_ok(auth_service, client_ip='203.0.113.7')
+        await self._login_ok(session_service, client_ip='203.0.113.7')
         created = mock_session_repo.create.call_args.args[0]
         assert created.ip_address == '203.0.113.7'
 
     @pytest.mark.asyncio
     async def test_login_sanitizes_garbage_ip_to_unknown(
         self,
-        auth_service: AuthService,
+        session_service: SessionService,
         mock_user_repo: MagicMock,
         mock_session_repo: MagicMock,
     ) -> None:
@@ -950,6 +964,6 @@ class TestLoginContractFixes:
         mock_user_repo.get_by_email.return_value = self._active_user(uuid7())
         mock_session_repo.count_active_for_user.return_value = 0
 
-        await self._login_ok(auth_service, client_ip='not-an-ip-address')
+        await self._login_ok(session_service, client_ip='not-an-ip-address')
         created = mock_session_repo.create.call_args.args[0]
         assert created.ip_address == 'unknown'
