@@ -32,7 +32,7 @@ Before writing a single line of logic, identify the major business domains. Each
 
 | Domain | Responsibility |
 |---|---|
-| `users` | Authentication, user management, email verification |
+| `users` | Authentication, user management, email verification, session lifecycle (login, sessions, logout) |
 | `hello` | Sample domain / health check |
 
 **Rule:** No cross-domain imports between domain modules. A file inside `questr/domains/users/` must not import from `questr/domains/hello/` or any other domain. This is enforced by lint rule **QTR002** (see [Lint Rules](#15-lint-rules)).
@@ -56,7 +56,7 @@ domains/users/
 
 | File | Contains | Is allowed to import |
 |---|---|---|
-| `api.py` | `APIRouter` routes, Pydantic request/response models, `Depends()` providers, type aliases (`T_AuthService`) | `service.py`, `repository.py`, `infrastructure/`, `app/dependencies.py` |
+| `api.py` | `APIRouter` routes, Pydantic request/response models, `Depends()` providers, type aliases (`T_AccountService`, `T_SessionService`) | `service.py`, `repository.py`, `infrastructure/`, `app/dependencies.py` |
 | `service.py` | Pure domain functions, business logic, service/use case classes | `repository.py`, `common/`, `infrastructure/` |
 | `repository.py` | Domain dataclasses, repository classes with `_to_domain()` mappers | `infrastructure/orm/`, `common/` |
 
@@ -103,7 +103,7 @@ questr/
   domains/
     users/
       api.py         # HTTP routes + Pydantic schemas + Depends wiring
-      service.py     # AuthService (signup, verify, resend, login, logout)
+      service.py     # AccountService (signup, verify, resend) + SessionService (login, validate, logout)
       repository.py  # User + EmailVerification + Session dataclasses + repos
     hello/
       api.py         # Hello endpoint + response schema
@@ -115,14 +115,13 @@ questr/
       models.py      # ORM models (thin, using Mapped[] style)
     email.py         # BaseEmailService, SmtpEmailService, ConsoleEmailService, factory
     rate_limiter.py  # RedisRateLimiter + get_rate_limiter() factory
+    login_rate_limiter.py  # LoginRateLimiter + get_login_rate_limiter() factory
     redis.py         # Redis connection pool
   common/            # Shared domain-agnostic types
     enums.py         # UserRole, UserStatus
     exceptions.py    # QuestrException hierarchy
   api/
     router.py        # Root APIRouter: includes all domain routers
-  app/
-    dependencies.py  # Shared FastAPI wiring (get_client_ip, T_ClientIP)
   migrations/        # Alembic database migrations
   factory.py         # App factory (create_app)
   lifespan.py        # FastAPI lifespan (startup/shutdown)
@@ -159,7 +158,7 @@ cannot be caught by ``app.add_exception_handler``).
 **Import rule (TD-007):** ``app/`` MAY import from domain repositories. Domains
 MUST NOT import from ``app/``. This is the reverse of the usual domain dependency
 direction, but it is justified because the middleware needs session data without
-pulling ``AuthService`` into a cross-cutting concern. It violates neither QTR001
+pulling ``SessionService`` into a cross-cutting concern. It violates neither QTR001
 (no ORM import) nor QTR002 (not a cross-domain import).
 
 ### Rate Limiters
@@ -235,7 +234,7 @@ An Anti-Corruption Layer is a thin adapter that sits between your domain and an 
 The `BaseEmailService` abstraction is **justified** because:
 
 - **Question 3 answered yes:** SMTP libraries (`aiosmtplib`) would pollute the domain with transport concepts (`start_tls`, `authentication`). The ACL (`BaseEmailService`) keeps the domain clean.
-- **Question 2 answered no (but still justified):** Only one consumer (`AuthService`) needs email sending today, but question 3 overrides — the external contract pollution risk is real.
+- **Question 2 answered no (but still justified):** Only one consumer (`AccountService`) needs email sending today, but question 3 overrides — the external contract pollution risk is real.
 
 > **Rule:** No interface, use case class, DTO, or adapter shall be introduced without answering these three questions first.
 
@@ -508,11 +507,25 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from questr.app.dependencies import T_ClientIP
-from questr.infrastructure.email import get_email_service
+from questr.infrastructure.email import (
+    BaseEmailService,
+    get_email_service,
+)
+from questr.infrastructure.login_rate_limiter import (
+    LoginRateLimiter,
+    get_login_rate_limiter,
+)
 from questr.infrastructure.orm.base import get_async_session
-from questr.infrastructure.rate_limiter import get_rate_limiter
-from questr.domains.users.repository import UserRepository
-from questr.domains.users.service import AuthService
+from questr.infrastructure.rate_limiter import (
+    RedisRateLimiter,
+    get_rate_limiter,
+)
+from questr.domains.users.repository import (
+    EmailVerificationRepository,
+    SessionRepository,
+    UserRepository,
+)
+from questr.domains.users.service import AccountService, SessionService
 
 
 async def get_user_repository(
@@ -521,15 +534,48 @@ async def get_user_repository(
     return UserRepository(session)
 
 
-async def get_auth_service(
+async def get_verification_repository(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+) -> EmailVerificationRepository:
+    return EmailVerificationRepository(session)
+
+
+async def get_session_repository(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+) -> SessionRepository:
+    return SessionRepository(session)
+
+
+async def get_account_service(
     user_repo: Annotated[UserRepository, Depends(get_user_repository)],
+    verification_repo: Annotated[
+        EmailVerificationRepository,
+        Depends(get_verification_repository),
+    ],
     email_service: Annotated[BaseEmailService, Depends(get_email_service)],
     rate_limiter: Annotated[RedisRateLimiter, Depends(get_rate_limiter)],
-) -> AuthService:
-    return AuthService(
+) -> AccountService:
+    return AccountService(
         user_repo=user_repo,
+        verification_repo=verification_repo,
         email_service=email_service,
         rate_limiter=rate_limiter,
+    )
+
+
+async def get_session_service(
+    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
+    session_repo: Annotated[
+        SessionRepository, Depends(get_session_repository)
+    ],
+    login_rate_limiter: Annotated[
+        LoginRateLimiter, Depends(get_login_rate_limiter)
+    ],
+) -> SessionService:
+    return SessionService(
+        user_repo=user_repo,
+        session_repo=session_repo,
+        login_rate_limiter=login_rate_limiter,
     )
 ```
 
@@ -576,19 +622,36 @@ async def lifespan(app: FastAPI):
 ```python
 # factory.py
 from fastapi import FastAPI
+
 from questr.api.router import api_router
-from questr.lifespan import lifespan
-from questr.common.exceptions import (
+from questr.app.middleware import CsrfMiddleware
+from questr.common.exceptions import (  # ... 9 exception handlers below ...
+    AccountBannedError,
     AccountSuspendedError,
+    AuthenticationError,
+    EmailNotVerifiedError,
     InvalidVerificationTokenError,
     RateLimitExceededError,
+    RateLimiterUnavailableError,
+    TooManyActiveSessionsError,
     UserAlreadyExistsError,
 )
+from questr.lifespan import lifespan
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title='questr', version='0.1.0', lifespan=lifespan)
-    # Exception handlers registered here
+    """Create and configure the FastAPI application."""
+    app = FastAPI(
+        title='questr',
+        description='Game tracking application backend',
+        version='0.1.0',
+        lifespan=lifespan,
+    )
+
+    app.add_middleware(CsrfMiddleware)
+
+    # ... 9 exception handlers registered (one per custom exception) ...
+
     app.include_router(api_router)
     return app
 ```
@@ -607,16 +670,54 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     APP_NAME: str = 'questr'
     DEBUG: bool = False
-    DATABASE_URL: str = 'postgresql+psycopg://app_user:app_password@questr_database:5432/app_db'
-    REDIS_URL: str = 'redis://localhost:6379/0'
+    POSTGRES_USER: str = 'questr'
+    POSTGRES_PASSWORD: str = 'qB2xSEEJ-Q.UI3'
+    POSTGRES_DB: str = 'questr_db'
+    POSTGRES_HOST: str = '127.0.0.1'
+    REDIS_HOST: str = '127.0.0.1'
+
+    @property
+    def DATABASE_URL(self) -> str:
+        return (
+            f'postgresql+psycopg://{self.POSTGRES_USER}'
+            f':{self.POSTGRES_PASSWORD}'
+            f'@{self.POSTGRES_HOST}:5432/{self.POSTGRES_DB}'
+        )
+
+    @property
+    def REDIS_URL(self) -> str:
+        return f'redis://{self.REDIS_HOST}:6379/0'
+
     EMAIL_ENABLED: bool = False
     SMTP_HOST: str = 'localhost'
     SMTP_PORT: int = 1025
     SMTP_USER: str = ''
     SMTP_PASSWORD: str = ''
+    SMTP_USE_STARTTLS: bool = True
     EMAIL_FROM: str = 'noreply@questr.app'
+    APP_URL: str = 'http://localhost:8000'
     RATE_LIMIT_RESEND_MAX: int = 3
     RATE_LIMIT_RESEND_WINDOW_HOURS: int = 1
+
+    # Login throttling
+    LOGIN_PER_ACCOUNT_MAX_ATTEMPTS: int = 5
+    LOGIN_PER_ACCOUNT_WINDOW_MINUTES: int = 15
+    LOGIN_LOCKOUT_MINUTES: int = 30
+    LOGIN_PER_IP_MAX_ATTEMPTS: int = 20
+    LOGIN_PER_IP_WINDOW_MINUTES: int = 10
+
+    # Session lifetime
+    SESSION_IDLE_MINUTES: int = 30
+    SESSION_ABSOLUTE_HOURS: int = 8
+    SESSION_REMEMBER_DAYS: int = 30
+
+    # Session caps / cookie security
+    MAX_CONCURRENT_SESSIONS: int = 10
+    SECURE_COOKIE: bool = True
+
+    @property
+    def app_url(self) -> str:
+        return self.APP_URL.rstrip('/')
 
     model_config = {'env_file': '.env', 'extra': 'ignore'}
 
