@@ -52,12 +52,18 @@ domains/users/
     repository.py # Domain dataclasses + persistence (ORM queries, _to_domain mapping)
 ```
 
+Domains without persistence (e.g., the stateless `hello` sample) need only
+`api.py` and `service.py` -- `repository.py` is omitted because there is no
+ORM model and no `_to_domain()` mapping to host. The three-file structure is a
+ceiling, not a floor: a domain starts with the files it needs and grows toward
+three, never past it without justification.
+
 ### Responsibilities
 
 | File | Contains | Is allowed to import |
 |---|---|---|
-| `api.py` | `APIRouter` routes, Pydantic request/response models, `Depends()` providers, type aliases (`T_AccountService`, `T_SessionService`) | `service.py`, `repository.py`, `infrastructure/`, `app/dependencies.py` |
-| `service.py` | Pure domain functions, business logic, service/use case classes | `repository.py`, `common/`, `infrastructure/` |
+| `api.py` | `APIRouter` routes, Pydantic request/response models, `Depends()` providers, type aliases (`T_AccountService`, `T_SessionService`) | `service.py`, `repository.py`, `infrastructure/`, `app/dependencies.py`, `common/`, `settings` |
+| `service.py` | Pure domain functions, business logic, service/use case classes | `repository.py`, `common/`, `infrastructure/`, `settings` |
 | `repository.py` | Domain dataclasses, repository classes with `_to_domain()` mappers | `infrastructure/orm/`, `common/` |
 
 ### Why Domain Dataclasses Live in `repository.py`
@@ -69,6 +75,14 @@ Domain dataclasses (`User`, `EmailVerification`) are defined in `repository.py` 
 2. **The persistence boundary defines the contract.** The repository is where infrastructure (`infrastructure/orm/models.py`) meets domain code. Defining the domain dataclass at this boundary makes the mapping contract explicit: `service.py` imports `User` from `repository.py`, not from `infrastructure/orm/models.py`, which would violate QTR001.
 
 `service.py` imports domain dataclasses from `repository.py`, which is allowed by the dependency direction below. This keeps the three-file structure intact without adding a fourth file.
+
+**Scope of this rule:** it covers only **persistence-bound domain entities** --
+those backed by an ORM model and mapped via `_to_domain()` (e.g., `User`,
+`Session`, `EmailVerification`). Use-case **result value objects** that have no
+ORM counterpart and no persistence mapping (e.g., `PasswordValidationResult`)
+belong with the use-case logic that produces them, in `service.py`. The
+distinguishing test is the presence of a `_to_domain()` mapper: if a dataclass
+has one, it lives in `repository.py`; if not, it stays in `service.py`.
 
 ### Dependency Direction
 
@@ -107,7 +121,7 @@ questr/
       repository.py  # User + EmailVerification + Session dataclasses + repos
     hello/
       api.py         # Hello endpoint + response schema
-      service.py     # HelloService + get_greeting()
+      service.py     # get_greeting() (time-of-day greeting)
   orchestrators/     # Cross-domain coordination (top-level, not inside domains/)
   infrastructure/
     orm/
@@ -122,10 +136,14 @@ questr/
     exceptions.py    # QuestrException hierarchy
   api/
     router.py        # Root APIRouter: includes all domain routers
-  migrations/        # Alembic database migrations
   factory.py         # App factory (create_app)
   lifespan.py        # FastAPI lifespan (startup/shutdown)
   settings.py        # Configuration (Pydantic BaseSettings)
+  __init__.py        # Package marker (empty)
+  __main__.py        # Entry point for `python -m questr` (delegates to shell.main)
+  shell.py           # Interactive query shell (QTR001 tooling exception)
+
+migrations/          # Alembic database migrations (repo root; see alembic.ini)
 
 tests/
   behavior/
@@ -155,11 +173,21 @@ returning direct ``JSONResponse`` 403s (since Starlette middleware raises
 cannot be caught by ``app.add_exception_handler``).
 - `dependencies.py` — shared FastDI type aliases and `Depends()` providers.
 
-**Import rule (TD-007):** ``app/`` MAY import from domain repositories. Domains
-MUST NOT import from ``app/``. This is the reverse of the usual domain dependency
-direction, but it is justified because the middleware needs session data without
-pulling ``SessionService`` into a cross-cutting concern. It violates neither QTR001
-(no ORM import) nor QTR002 (not a cross-domain import).
+**Import rule (TD-007):** The ``app/`` package exchanges with domains in two
+directions, governed separately:
+
+- **(a) ``app/`` -> domains (reversal, justified):** ``app/`` MAY import from
+domain repositories. This reverses the usual domain dependency direction; it is
+justified because ``app/middleware.py`` needs session data without pulling
+``SessionService`` into a cross-cutting concern. It violates neither QTR001 (no
+ORM import) nor QTR002 (not a cross-domain import).
+- **(b) domains -> ``app/`` (restricted):** Domain ``service.py`` and
+``repository.py`` MUST NOT import from ``app/``. Domain ``api.py`` -- the HTTP
+adapter, not business logic -- is permitted to import *only*
+``app/dependencies.py`` for shared type aliases and ``Depends()`` providers; it
+MUST NOT import ``app/middleware.py``. This carve-out mirrors the QTR002
+``api.py``/orchestrator exception: the HTTP adapter is the seam where cross-cutting
+wiring is allowed to enter a domain, while domain logic stays insulated.
 
 ### Rate Limiters
 
