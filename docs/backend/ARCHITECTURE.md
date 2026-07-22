@@ -651,18 +651,27 @@ Two custom lint rules are enforced via `scripts/lint_custom.py` (run with `uv ru
 
 ### QTR001: No ORM Imports Outside Repository Files
 
-ORM models (`infrastructure.orm.models`) must only be imported in files ending in `repository.py` or `test_repository.py`.
+ORM models (`infrastructure.orm.models`) must only be imported in production
+files ending in `repository.py`, plus the documented `shell.py` tooling
+exception. The rule scans the `questr/` package only; the `tests/` tree is out
+of scope (factory-boy factories legitimately import ORM models per
+[coding-guidelines.md](./coding-guidelines.md)). The matcher covers both import
+shapes: `from ...orm.models import X` and `from ...orm import models`.
 
 **Violation:**
 ```python
 # domains/users/service.py
-from questr.infrastructure.orm.models import UserORMModel  # ⛔ VIOLATION
+from questr.infrastructure.orm.models import UserORMModel  # ⛔ VIOLATION (Form B)
+from questr.infrastructure.orm import models                # ⛔ VIOLATION (Form C)
 ```
 
 **Allowed:**
 ```python
 # domains/users/repository.py
 from questr.infrastructure.orm.models import UserORMModel  # ✅ ALLOWED
+
+# shell.py (documented tooling exception)
+from questr.infrastructure.orm import models as _orm_models  # ✅ ALLOWED
 ```
 
 ### QTR002: No Cross-Domain Imports Between Domain Modules

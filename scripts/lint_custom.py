@@ -4,8 +4,21 @@ Usage:
     uv run python scripts/lint_custom.py
 
 Exit code:
-    0 — no violations
-    1 — violations found
+    0 -- no violations
+    1 -- violations found
+
+Scope:
+    Both rules scan the production package (``questr/``) only. The ``tests/``
+    tree is intentionally out of scope: factory-boy factories legitimately
+    import ORM models (per docs/backend/coding-guidelines.md), and enforcing
+    QTR001 there would contradict that guideline. QTR002 (no cross-domain
+    imports) likewise applies to production modules only.
+
+QTR001 filename exemptions (allowed to import ORM models):
+    - ``repository.py`` -- domain persistence boundary (canonical case).
+    - ``shell.py``      -- developer query shell; imports the ORM ``models``
+                           module to expose model classes in the interactive
+                           namespace, not domain code. See questr/shell.py.
 """
 
 from __future__ import annotations
@@ -32,9 +45,7 @@ def _check_qtr001(filepath: Path) -> list[str]:
     rel = filepath.relative_to(PROJECT_ROOT)
     filename = filepath.name
 
-    if filename.endswith('repository.py') or filename.endswith(
-        'test_repository.py'
-    ):
+    if filename.endswith('repository.py') or filename == 'shell.py':
         return violations
 
     try:
@@ -44,10 +55,20 @@ def _check_qtr001(filepath: Path) -> list[str]:
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            if node.module and 'infrastructure.orm.models' in node.module:
+            module = node.module or ''
+            # Form B: from questr.infrastructure.orm.models import X
+            if 'infrastructure.orm.models' in module:
                 violations.append(
                     f'{rel}:{node.lineno}: QTR001 '
                     f'ORM model import in non-repository file'
+                )
+            # Form C: from questr.infrastructure.orm import models
+            elif module.endswith('infrastructure.orm') and any(
+                alias.name == 'models' for alias in node.names
+            ):
+                violations.append(
+                    f'{rel}:{node.lineno}: QTR001 '
+                    f'ORM model module import in non-repository file'
                 )
         elif isinstance(node, ast.Import):
             for alias in node.names:
