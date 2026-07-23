@@ -169,3 +169,6 @@ dev-hurl-create-users:  ## create default users through the API using hurl (requ
 	@hurl --very-verbose --variables-file hurl/vars/auth/signup/user_001.vars hurl/auth/signup.hurl
 	@hurl --very-verbose --variables-file hurl/vars/auth/signup/user_002.vars hurl/auth/signup.hurl
 	@hurl --very-verbose --variables-file hurl/vars/auth/signup/user_003.vars hurl/auth/signup.hurl
+
+dev-hurl-auth-flow:  ## login + /me + logout + /me flow using hurl (requires the dev-server up)
+	@hurl --very-verbose --variables-file hurl/vars/auth/flow/user_001.vars hurl/auth/auth-flow.hurl
