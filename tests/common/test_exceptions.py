@@ -72,4 +72,4 @@ def test_settings_expose_login_and_session_constants() -> None:
     assert settings.SESSION_ABSOLUTE_HOURS == 8  # noqa: PLR2004
     assert settings.SESSION_REMEMBER_DAYS == 30  # noqa: PLR2004
     assert settings.MAX_CONCURRENT_SESSIONS == 10  # noqa: PLR2004
-    assert settings.SECURE_COOKIE is True
+    assert settings.SECURE_COOKIE is False  # noqa: FBT003 -- dev default; prod is locked True via ENVIRONMENT=prod

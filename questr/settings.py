@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings
 
 
@@ -51,8 +53,36 @@ class Settings(BaseSettings):
     # Session caps
     MAX_CONCURRENT_SESSIONS: int = 10
 
-    # Cookie security
-    SECURE_COOKIE: bool = True
+    # Environment discriminator. Pydantic validates this Literal at
+    # load time, so typos (e.g. ENVIRONMENT=production) fail with a
+    # clear validation error. Default is 'dev' because the current
+    # .env uses an HTTP APP_URL. Production deployments MUST set
+    # ENVIRONMENT=prod explicitly.
+    ENVIRONMENT: Literal['dev', 'prod'] = 'dev'
+
+    # Cookie security.
+    #
+    # NOTE: SECURE_COOKIE is a computed property, NOT a regular
+    # settings field. It is derived from ENVIRONMENT and is LOCKED
+    # to True in production. Setting SECURE_COOKIE in the
+    # environment or .env has no effect -- the property always
+    # wins.
+    #
+    # Rationale:
+    # - The Secure flag instructs clients (browsers, hurl/libcurl)
+    #   to only transmit the cookie over HTTPS.
+    # - In dev (HTTP), the Secure flag would prevent cookies from
+    #   being sent, which breaks the auth flow: login sets a
+    #   session_id cookie that subsequent requests (/me, logout)
+    #   depend on.
+    # - In prod (HTTPS), the Secure flag is a security requirement
+    #   to prevent cookie theft over plaintext connections.
+    #
+    # To switch behavior, set ENVIRONMENT=dev or ENVIRONMENT=prod.
+    # Do NOT try to set SECURE_COOKIE directly; it is ignored.
+    @property
+    def SECURE_COOKIE(self) -> bool:
+        return self.ENVIRONMENT == 'prod'
 
     @property
     def app_url(self) -> str:
