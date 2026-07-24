@@ -85,6 +85,11 @@ class Settings(BaseSettings):
         return self.ENVIRONMENT == 'prod'
 
     @property
+    def SERVE_DOCS(self) -> bool:
+        """Serve OpenAPI docs (Swagger/Redoc) only in dev environment."""
+        return self.ENVIRONMENT == 'dev'
+
+    @property
     def app_url(self) -> str:
         return self.APP_URL.rstrip('/')
 

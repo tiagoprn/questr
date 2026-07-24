@@ -15,6 +15,7 @@ from questr.common.exceptions import (
     UserAlreadyExistsError,
 )
 from questr.lifespan import lifespan
+from questr.settings import settings
 
 
 def create_app() -> FastAPI:
@@ -24,6 +25,9 @@ def create_app() -> FastAPI:
         description='Game tracking application backend',
         version='0.1.0',
         lifespan=lifespan,
+        docs_url='/docs' if settings.SERVE_DOCS else None,
+        redoc_url='/redoc' if settings.SERVE_DOCS else None,
+        openapi_url='/openapi.json' if settings.SERVE_DOCS else None,
     )
 
     app.add_middleware(CsrfMiddleware)

@@ -113,5 +113,36 @@ For the full ADR, see:
 
 ### API
 
-- Swagger (interactive): <http://kvm-labs:8000/docs>
-- Redoc (only documentation): <http://kvm-labs:8000/redoc>
+The interactive API documentation (Swagger/Redoc) is served **only in development**
+(`ENVIRONMENT=dev`).
+
+- Swagger UI: [http://kvm-labs:8000/docs](http://kvm-labs:8000/docs)
+- Redoc: [http://kvm-labs:8000/redoc](http://kvm-labs:8000/redoc)
+
+In production (`ENVIRONMENT=prod`), these endpoints are disabled entirely and
+return 404.
+
+## Security
+
+### API documentation access control
+
+The OpenAPI schema (Swagger UI, Redoc, and `/openapi.json`) is **disabled** in
+production. This prevents accidental exposure of the internal API surface to
+unauthorised parties.
+
+**Rationale:**
+
+- The OpenAPI schema is a development aid, not a production feature. It
+  enumerates every endpoint, request body schema, and response format, which
+  provides unnecessary reconnaissance information to potential attackers.
+- A `superuser` role was previously considered for gating these endpoints, but
+  role escalation via direct database writes lacks auditability, accountability,
+  and revocation. Any team member with database credentials can silently
+  escalate privileges with no trace.
+- The current approach uses the `ENVIRONMENT` discriminator: docs are served
+  only when `ENVIRONMENT=dev`, and completely removed from the routing table
+  in `prod`.
+
+Documentation for the API should be delivered to integrators via a static
+export (e.g., an OpenAPI YAML file) rather than through the running
+application.
