@@ -1,11 +1,12 @@
 """Out-of-band superuser promotion script.
 
 Usage:
-    uv run python -m questr.shell --script \
-        scripts/fast_shell/promote_superuser.py
+    make shell SCRIPT=scripts/fast_shell/promote_superuser.py \
+        EMAIL=promote@test.com
 
 Promotes a verified, ACTIVE user to SUPERUSER role and writes a
 ROLE_GRANTED audit row with actor_id=None (out-of-band marker).
+Only ACTIVE users may be promoted out-of-band.
 """
 
 import asyncio
@@ -16,6 +17,7 @@ from scripts.fast_shell import (
     AuditLogORMModel,
     UserORMModel,
     UserRole,
+    UserStatus,
     select,
     session,
 )
@@ -34,6 +36,13 @@ async def promote(email: str) -> None:
 
     if user.role == UserRole.SUPERUSER:
         print(f'User "{email}" is already a superuser.')
+        return
+
+    if user.status != UserStatus.ACTIVE:
+        print(
+            f'User "{email}" is not ACTIVE (status={user.status.value}); '
+            f'aborting promotion.'
+        )
         return
 
     old_role = user.role.value

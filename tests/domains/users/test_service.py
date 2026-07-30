@@ -7,7 +7,7 @@ from uuid import uuid7
 
 import pytest
 
-from questr.common.enums import UserRole, UserStatus
+from questr.common.enums import AuditAction, UserRole, UserStatus
 from questr.common.exceptions import (
     AccountBannedError,
     AccountSuspendedError,
@@ -18,10 +18,16 @@ from questr.common.exceptions import (
     TooManyActiveSessionsError,
     UserAlreadyExistsError,
 )
-from questr.domains.users.repository import Session as SessionDomain
+from questr.domains.users.repository import (
+    AuditLog,
+)
+from questr.domains.users.repository import (
+    Session as SessionDomain,
+)
 from questr.domains.users.service import (
     AccountService,
     EmailVerification,
+    RoleService,
     SessionService,
     User,
 )
@@ -72,13 +78,14 @@ def mock_session_repo() -> MagicMock:
     repo.revoke_all_for_user = AsyncMock(return_value=0)
     repo.count_active_for_user = AsyncMock(return_value=0)
     repo.update_last_activity = AsyncMock()
+    repo.update_csrf_hash = AsyncMock()
     return repo
 
 
 @pytest.fixture
 def mock_audit_log_repo() -> MagicMock:
     repo = MagicMock()
-    repo.create = AsyncMock()
+    repo.insert = AsyncMock()
     return repo
 
 
@@ -775,6 +782,110 @@ class TestValidateSession:
         mock_session_repo.deactivate.assert_called_once_with(session.id)
 
 
+class TestStopImpersonationService:
+    """Tests for SessionService.stop_impersonation() admin re-validation.
+
+    The plan names validate_session as the re-validation mechanism for
+    the linked admin session at stop time. An admin session that
+    idle- or absolute-expired during impersonation must cause stop to
+    raise AuthenticationError and the admin session to be deactivated,
+    rather than succeeding against a dead admin session.
+    """
+
+    @pytest.mark.asyncio
+    async def test_idle_expired_admin_session_raises_and_deactivates(
+        self,
+        session_service: SessionService,
+        mock_session_repo: MagicMock,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        admin_id = uuid7()
+        admin_session_id = uuid7()
+        impersonation_session_id = uuid7()
+
+        impersonation_session = SessionDomain(
+            id=impersonation_session_id,
+            user_id=uuid7(),
+            is_active=True,
+            issued_at=now - timedelta(minutes=20),
+            last_activity=now,
+            expires_at=now + timedelta(minutes=30),
+            absolute_expires_at=now + timedelta(minutes=40),
+            ip_address='127.0.0.1',
+            user_agent='pytest',
+            impersonator_id=admin_id,
+            impersonator_session_id=admin_session_id,
+        )
+        admin_session = SessionDomain(
+            id=admin_session_id,
+            user_id=admin_id,
+            is_active=True,
+            issued_at=now - timedelta(hours=2),
+            last_activity=now - timedelta(minutes=45),  # past idle 30 min
+            expires_at=now - timedelta(minutes=15),  # idle expired
+            absolute_expires_at=now + timedelta(hours=6),
+            ip_address='127.0.0.1',
+            user_agent='pytest',
+        )
+        # First get_by_id: impersonation session. Second: admin
+        # session via re-validation.
+        mock_session_repo.get_by_id.side_effect = [
+            impersonation_session,
+            admin_session,
+        ]
+
+        with pytest.raises(AuthenticationError):
+            await session_service.stop_impersonation(impersonation_session_id)
+
+        # Admin session must have been deactivated by re-validation.
+        mock_session_repo.deactivate.assert_called_with(admin_session_id)
+
+    @pytest.mark.asyncio
+    async def test_absolute_expired_admin_session_raises(
+        self,
+        session_service: SessionService,
+        mock_session_repo: MagicMock,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        admin_id = uuid7()
+        admin_session_id = uuid7()
+        impersonation_session_id = uuid7()
+
+        impersonation_session = SessionDomain(
+            id=impersonation_session_id,
+            user_id=uuid7(),
+            is_active=True,
+            issued_at=now - timedelta(minutes=20),
+            last_activity=now,
+            expires_at=now + timedelta(minutes=30),
+            absolute_expires_at=now + timedelta(minutes=40),
+            ip_address='127.0.0.1',
+            user_agent='pytest',
+            impersonator_id=admin_id,
+            impersonator_session_id=admin_session_id,
+        )
+        admin_session = SessionDomain(
+            id=admin_session_id,
+            user_id=admin_id,
+            is_active=True,
+            issued_at=now - timedelta(hours=12),
+            last_activity=now - timedelta(minutes=5),
+            expires_at=now + timedelta(minutes=25),
+            absolute_expires_at=now - timedelta(hours=1),  # absolute expired
+            ip_address='127.0.0.1',
+            user_agent='pytest',
+        )
+        mock_session_repo.get_by_id.side_effect = [
+            impersonation_session,
+            admin_session,
+        ]
+
+        with pytest.raises(AuthenticationError):
+            await session_service.stop_impersonation(impersonation_session_id)
+
+        mock_session_repo.deactivate.assert_called_with(admin_session_id)
+
+
 class TestLogout:
     """Tests for SessionService.logout() and logout_all()."""
 
@@ -979,3 +1090,96 @@ class TestLoginContractFixes:
         await self._login_ok(session_service, client_ip='not-an-ip-address')
         created = mock_session_repo.create.call_args.args[0]
         assert created.ip_address == 'unknown'
+
+
+class TestRoleServiceChangeRole:
+    """Tests for RoleService.change_role() planned signature.
+
+    Planned signature: ``change_role(*, actor, target_id, new_role,
+    ip, user_agent) -> AuditLog`` with ip/user_agent recorded on the
+    audit row (F5). The service fetches the target itself
+    (needs old_role).
+    """
+
+    @pytest.fixture
+    def role_service(
+        self,
+        mock_user_repo: MagicMock,
+        mock_audit_log_repo: MagicMock,
+    ) -> RoleService:
+        return RoleService(
+            user_repo=mock_user_repo,
+            audit_repo=mock_audit_log_repo,
+        )
+
+    @pytest.mark.asyncio
+    async def test_change_role_returns_audit_log_with_ip_user_agent(
+        self,
+        role_service: RoleService,
+        mock_user_repo: MagicMock,
+        mock_audit_log_repo: MagicMock,
+    ) -> None:
+        actor = User(
+            id=uuid7(),
+            username='admin',
+            role=UserRole.SUPERUSER,
+            status=UserStatus.ACTIVE,
+        )
+        target = User(
+            id=uuid7(),
+            username='target',
+            role=UserRole.USER,
+            status=UserStatus.ACTIVE,
+        )
+        updated = User(
+            id=target.id,
+            username='target',
+            role=UserRole.SUPERUSER,
+            status=UserStatus.ACTIVE,
+        )
+        mock_user_repo.get_by_id.return_value = target
+        mock_user_repo.update_role = AsyncMock(return_value=updated)
+        persisted = AuditLog(
+            id=uuid7(),
+            action=AuditAction.ROLE_GRANTED,
+            actor_id=actor.id,
+            target_id=target.id,
+            ip_address='1.2.3.4',
+            user_agent='pytest-role-ua',
+        )
+        mock_audit_log_repo.insert = AsyncMock(return_value=persisted)
+
+        result = await role_service.change_role(
+            actor=actor,
+            target_id=target.id,
+            new_role=UserRole.SUPERUSER,
+            ip='1.2.3.4',
+            user_agent='pytest-role-ua',
+        )
+
+        # Service returns the persisted AuditLog.
+        assert result is persisted
+        mock_user_repo.get_by_id.assert_called_once_with(target.id)
+        # The AuditLog passed to the repo carries ip/user_agent (F5).
+        sent = mock_audit_log_repo.insert.call_args.args[0]
+        assert isinstance(sent, AuditLog)
+        assert sent.ip_address == '1.2.3.4'
+        assert sent.user_agent == 'pytest-role-ua'
+        assert sent.action == AuditAction.ROLE_GRANTED
+
+    @pytest.mark.asyncio
+    async def test_change_role_unknown_target_raises(
+        self,
+        role_service: RoleService,
+        mock_user_repo: MagicMock,
+    ) -> None:
+        mock_user_repo.get_by_id.return_value = None
+
+        with pytest.raises(AuthenticationError):
+            await role_service.change_role(
+                actor=User(id=uuid7(), role=UserRole.SUPERUSER),
+                target_id=uuid7(),
+                new_role=UserRole.SUPERUSER,
+                ip='1.2.3.4',
+                user_agent='ua',
+            )

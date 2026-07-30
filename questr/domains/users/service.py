@@ -577,7 +577,7 @@ class SessionService:
         created_session = await self.session_repo.create(impersonation_session)
 
         # Write audit row
-        await self.audit_repo.create(
+        await self.audit_repo.insert(
             AuditLog(
                 action=AuditAction.IMPERSONATION_START,
                 actor_id=admin_user.id,
@@ -642,32 +642,23 @@ class SessionService:
         if session.impersonator_id is None:
             raise AuthenticationError('Not authenticated')
 
-        # Re-validate the linked admin session
-        admin_session = await self.session_repo.get_by_id(
+        # Re-validate the linked admin session via validate_session,
+        # which checks active + absolute + idle expiry, deactivates on
+        # expiry, slides the idle window on success, and fetches the
+        # admin user (plan-literal; stop-linkage is the biggest risk).
+        if session.impersonator_session_id is None:
+            raise AuthenticationError('Not authenticated')
+        admin_principal = await self.validate_session(
             session.impersonator_session_id
         )
-        if (
-            admin_session is None
-            or not admin_session.is_active
-            or admin_session.user_id != session.impersonator_id
-        ):
-            # Admin session is gone/expired/deactivated or belongs to
-            # a different user -> graceful degrade (401).
+        if admin_principal.user.id != session.impersonator_id:
             raise AuthenticationError('Not authenticated')
 
         # Deactivate the impersonation session
         await self.session_repo.deactivate(impersonation_session_id)
 
-        # Slide the admin session's idle window (accepted residual:
-        # validating the admin session at stop time slides its idle
-        # window, matching user expectation for an active session).
-        new_expiry = now + timedelta(minutes=settings.SESSION_IDLE_MINUTES)
-        await self.session_repo.update_last_activity(
-            admin_session.id, now, new_expiry
-        )
-
         # Write audit row
-        await self.audit_repo.create(
+        await self.audit_repo.insert(
             AuditLog(
                 action=AuditAction.IMPERSONATION_END,
                 actor_id=session.impersonator_id,
@@ -683,10 +674,12 @@ class SessionService:
         # Rotate the admin session's CSRF token
         csrf_raw = secrets.token_urlsafe(32)
         csrf_hash = hashlib.sha256(csrf_raw.encode()).hexdigest()
-        await self.session_repo.update_csrf_hash(admin_session.id, csrf_hash)
+        await self.session_repo.update_csrf_hash(
+            session.impersonator_session_id, csrf_hash
+        )
 
         return {
-            'admin_session_id': admin_session.id,
+            'admin_session_id': session.impersonator_session_id,
             'csrf_token': csrf_raw,
         }
 
@@ -707,28 +700,40 @@ class RoleService:
 
     async def change_role(
         self,
-        actor_id: UUID,
-        target_user: User,
+        *,
+        actor: User,
+        target_id: UUID,
         new_role: UserRole,
-    ) -> User:
+        ip: str,
+        user_agent: str,
+    ) -> AuditLog:
         """Change a user's role and write a ROLE_GRANTED/ROLE_REVOKED
         audit row.
 
+        The service fetches the target itself (it needs the old role
+        for the audit row). The audit row records ip_address and
+        user_agent for parity with impersonation audit rows.
+
         Args:
-            actor_id: The user performing the change.
-            target_user: The user whose role is changing.
+            actor: The user performing the change.
+            target_id: The id of the user whose role is changing.
             new_role: The new role to assign.
+            ip: The request client IP.
+            user_agent: The request user-agent string.
 
         Returns:
-            The updated user.
+            The persisted AuditLog entry.
 
         Raises:
             AuthenticationError: if the target is not found.
         """
-        old_role = target_user.role
+        target = await self.user_repo.get_by_id(target_id)
+        if target is None:
+            raise AuthenticationError('User not found')
+        old_role = target.role
 
         # Update via repository (the ORM model handles persistence)
-        updated = await self.user_repo.update_role(target_user.id, new_role)
+        updated = await self.user_repo.update_role(target.id, new_role)
         if updated is None:
             raise AuthenticationError('User not found')
 
@@ -742,14 +747,14 @@ class RoleService:
             if new_level >= old_level
             else AuditAction.ROLE_REVOKED
         )
-        await self.audit_repo.create(
+        return await self.audit_repo.insert(
             AuditLog(
                 action=action,
-                actor_id=actor_id,
-                target_id=target_user.id,
-                old_role=str(old_role.value) if old_role else None,
-                new_role=str(new_role.value),
+                actor_id=actor.id,
+                target_id=target.id,
+                old_role=old_role,
+                new_role=new_role,
+                ip_address=ip,
+                user_agent=user_agent,
             ),
         )
-
-        return updated

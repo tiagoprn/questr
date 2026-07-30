@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import Depends
 
 from questr.common.enums import UserRole
 from questr.common.exceptions import AuthorizationError
+
+if TYPE_CHECKING:
+    from questr.domains.users.repository import User
 
 
 class Permission(str, Enum):
@@ -42,9 +45,13 @@ def require_permission(
         current: T_CurrentUser = Depends(get_current_user),
     ) -> None:
         user = current['user']
-        role = user.role
-        if permission not in ROLE_PERMISSIONS.get(role, frozenset()):
+        if permission not in user_permissions(user):
             msg = f'Missing required permission: {permission.value}'
             raise AuthorizationError(message=msg)
 
     return _check_permission
+
+
+def user_permissions(user: User) -> frozenset[Permission]:
+    """Return the permission set granted to the user's role."""
+    return ROLE_PERMISSIONS.get(user.role, frozenset())

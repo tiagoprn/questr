@@ -129,13 +129,13 @@ class LogoutAllResponse(BaseModel):
 
 
 class ImpersonateRequest(BaseModel):
-    target_email: str
+    target_id: UUID
     reason: str | None = None
 
 
 class ChangeRoleRequest(BaseModel):
-    target_email: str
-    new_role: str
+    target_id: UUID
+    new_role: UserRole
 
 
 class MeResponse(BaseModel):
@@ -525,7 +525,7 @@ async def start_impersonation_route(
     admin_user = current['user']
     admin_session_id = UUID(request.cookies.get('session_id', ''))
 
-    target_user = await user_repo.get_by_email(payload.target_email)
+    target_user = await user_repo.get_by_id(payload.target_id)
     if target_user is None:
         from fastapi.responses import JSONResponse  # noqa: PLC0415
 
@@ -630,9 +630,9 @@ async def stop_impersonation_route(
     '/admin/roles',
     dependencies=[Depends(require_permission(Permission.MANAGE_ROLES))],
     responses={
-        400: {'description': 'Invalid role'},
         403: {'description': 'Missing permission or self-change'},
         404: {'description': 'Target user not found'},
+        422: {'description': 'Invalid role or target id'},
     },
 )
 async def change_role_route(
@@ -640,13 +640,14 @@ async def change_role_route(
     current: T_CurrentUser,
     user_repo: T_UserRepo,
     role_service: T_RoleService,
+    request: Request,
 ) -> Response:
     """Change a user's role. The actor may NOT change their own role
     (blocks self-demotion lockout).
     """
     actor = current['user']
 
-    target = await user_repo.get_by_email(payload.target_email)
+    target = await user_repo.get_by_id(payload.target_id)
     if target is None:
         from fastapi.responses import JSONResponse  # noqa: PLC0415
 
@@ -667,22 +668,15 @@ async def change_role_route(
             },
         )
 
-    try:
-        new_role = UserRole(payload.new_role)
-    except ValueError:
-        from fastapi.responses import JSONResponse  # noqa: PLC0415
-
-        return JSONResponse(
-            status_code=400,
-            content={
-                'detail': f'Invalid role: {payload.new_role}',
-            },
-        )
+    client_ip = request.client.host if request.client else '127.0.0.1'
+    user_agent = request.headers.get('user-agent', '')
 
     await role_service.change_role(
-        actor_id=actor.id,
-        target_user=target,
-        new_role=new_role,
+        actor=actor,
+        target_id=payload.target_id,
+        new_role=payload.new_role,
+        ip=client_ip,
+        user_agent=user_agent,
     )
 
     return Response(status_code=200)

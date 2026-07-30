@@ -36,7 +36,7 @@ def mock_user_repo() -> MagicMock:
 @pytest.fixture
 def mock_audit_log_repo() -> MagicMock:
     repo = MagicMock()
-    repo.create = AsyncMock()
+    repo.insert = AsyncMock()
     return repo
 
 

@@ -26,7 +26,7 @@ class TestAuditLogRepository:
         """An IMPERSONATION_START row persists with correct columns."""
         actor_id = uuid7()
         target_id = uuid7()
-        entry = await audit_repo.create(
+        entry = await audit_repo.insert(
             AuditLog(
                 action=AuditAction.IMPERSONATION_START,
                 actor_id=actor_id,
@@ -35,6 +35,7 @@ class TestAuditLogRepository:
             ),
         )
         assert entry.id is not None
+        assert isinstance(entry.action, AuditAction)
         assert entry.action == AuditAction.IMPERSONATION_START
         assert entry.actor_id == actor_id
         assert entry.target_id == target_id
@@ -45,7 +46,7 @@ class TestAuditLogRepository:
         """A ROLE_GRANTED row persists with old_role/new_role."""
         actor_id = uuid7()
         target_id = uuid7()
-        entry = await audit_repo.create(
+        entry = await audit_repo.insert(
             AuditLog(
                 action=AuditAction.ROLE_GRANTED,
                 actor_id=actor_id,
@@ -55,12 +56,15 @@ class TestAuditLogRepository:
             ),
         )
         assert entry.id is not None
+        assert isinstance(entry.old_role, UserRole)
+        assert isinstance(entry.new_role, UserRole)
         assert entry.old_role == UserRole.USER
         assert entry.new_role == UserRole.SUPERUSER
 
     async def test_no_update_method_exists(
         self, audit_repo: AuditLogRepository
     ) -> None:
-        """AuditLogRepository has no update or delete methods."""
+        """AuditLogRepository has no update or delete methods (insert-only)."""
         assert not hasattr(audit_repo, 'update')
         assert not hasattr(audit_repo, 'delete')
+        assert not hasattr(audit_repo, 'create')

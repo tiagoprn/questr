@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from questr.common.enums import AuditAction as AuditAction
 from questr.common.enums import UserRole as UserRole
+from questr.common.enums import UserStatus as UserStatus
 from questr.infrastructure.orm.models import (
     AuditLogORMModel as AuditLogORMModel,
 )

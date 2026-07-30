@@ -6,7 +6,7 @@ from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func, text
 
-from questr.common.enums import UserRole, UserStatus
+from questr.common.enums import AuditAction, UserRole, UserStatus
 from questr.infrastructure.orm.base import Base
 
 
@@ -133,7 +133,9 @@ class AuditLogORMModel(Base):
     )
 
     id: Mapped[UUID] = mapped_column(SAUUID, primary_key=True)
-    action: Mapped[str] = mapped_column(String(30), nullable=False)
+    action: Mapped[AuditAction] = mapped_column(
+        Enum(AuditAction), nullable=False
+    )
     actor_id: Mapped[UUID | None] = mapped_column(SAUUID, nullable=True)
     target_id: Mapped[UUID | None] = mapped_column(SAUUID, nullable=True)
     impersonator_id: Mapped[UUID | None] = mapped_column(SAUUID, nullable=True)

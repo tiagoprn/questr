@@ -34,7 +34,17 @@ def upgrade() -> None:
     op.create_table(
         'audit_log',
         sa.Column('id', sa.UUID(), nullable=False),
-        sa.Column('action', sa.String(30), nullable=False),
+        sa.Column(
+            'action',
+            sa.Enum(
+                'IMPERSONATION_START',
+                'IMPERSONATION_END',
+                'ROLE_GRANTED',
+                'ROLE_REVOKED',
+                name='auditaction',
+            ),
+            nullable=False,
+        ),
         sa.Column('actor_id', sa.UUID(), nullable=True),
         sa.Column('target_id', sa.UUID(), nullable=True),
         sa.Column('impersonator_id', sa.UUID(), nullable=True),
@@ -68,5 +78,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Downgrade schema."""
     op.drop_table('audit_log')
+    op.execute('DROP TYPE IF EXISTS auditaction')
     op.drop_column('sessions', 'impersonator_session_id')
     op.drop_column('sessions', 'impersonator_id')

@@ -31,9 +31,7 @@ class TestDocsInProd:
         'path',
         ['/docs', '/redoc', '/openapi.json'],
     )
-    async def test_endpoint_returns_404(
-        self, monkeypatch, path: str
-    ) -> None:
+    async def test_endpoint_returns_404(self, monkeypatch, path: str) -> None:
         monkeypatch.setattr(settings, 'ENVIRONMENT', 'prod')
         application = create_app()
 

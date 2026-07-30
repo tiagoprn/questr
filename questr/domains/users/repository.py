@@ -7,7 +7,7 @@ from uuid import UUID, uuid7
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from questr.common.enums import UserRole, UserStatus
+from questr.common.enums import AuditAction, UserRole, UserStatus
 from questr.infrastructure.orm.models import (
     AuditLogORMModel,
     EmailVerificationORMModel,
@@ -56,18 +56,18 @@ class AuditLog:
     """Audit log entry domain object."""
 
     id: UUID | None = None
-    action: str = ''
+    action: AuditAction = AuditAction.IMPERSONATION_START
     actor_id: UUID | None = None
     target_id: UUID | None = None
     impersonator_id: UUID | None = None
     impersonator_session_id: UUID | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
-    old_role: str | None = None
-    new_role: str | None = None
+    old_role: UserRole | None = None
+    new_role: UserRole | None = None
     reason: str | None = None
-    ip_address: str | None = None
-    user_agent: str | None = None
+    ip_address: str = ''
+    user_agent: str = ''
     created_at: datetime | None = None
 
 
@@ -359,7 +359,7 @@ class AuditLogRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def create(self, entry: AuditLog) -> AuditLog:
+    async def insert(self, entry: AuditLog) -> AuditLog:
         """Persist a new audit log entry.
 
         No update or delete methods: append-only discipline.
@@ -387,17 +387,19 @@ class AuditLogRepository:
     def _to_domain(orm_e: AuditLogORMModel) -> AuditLog:
         return AuditLog(
             id=orm_e.id,
-            action=orm_e.action,
+            action=AuditAction(orm_e.action)
+            if orm_e.action
+            else (AuditAction.IMPERSONATION_START),
             actor_id=orm_e.actor_id,
             target_id=orm_e.target_id,
             impersonator_id=orm_e.impersonator_id,
             impersonator_session_id=orm_e.impersonator_session_id,
             started_at=orm_e.started_at,
             ended_at=orm_e.ended_at,
-            old_role=orm_e.old_role,
-            new_role=orm_e.new_role,
+            old_role=UserRole(orm_e.old_role) if orm_e.old_role else None,
+            new_role=UserRole(orm_e.new_role) if orm_e.new_role else None,
             reason=orm_e.reason,
-            ip_address=orm_e.ip_address,
-            user_agent=orm_e.user_agent,
+            ip_address=orm_e.ip_address or '',
+            user_agent=orm_e.user_agent or '',
             created_at=orm_e.created_at,
         )

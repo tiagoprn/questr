@@ -43,6 +43,7 @@ def mock_session_service() -> MagicMock:
 def mock_user_repo() -> MagicMock:
     repo = MagicMock(spec=UserRepository)
     repo.get_by_email = AsyncMock()
+    repo.get_by_id = AsyncMock()
     return repo
 
 
@@ -105,7 +106,7 @@ class TestStartImpersonation:
     ) -> None:
         """T-015: Superuser starts impersonation, gets session_id cookie."""
         target = _make_target_user()
-        mock_user_repo.get_by_email.return_value = target
+        mock_user_repo.get_by_id.return_value = target
 
         fake_session = Session(
             id=uuid7(),
@@ -134,7 +135,7 @@ class TestStartImpersonation:
         client.cookies['csrf_token'] = 'admin-csrf'
         resp = await client.post(
             '/api/v1/auth/admin/impersonate',
-            json={'target_email': 'target@example.com'},
+            json={'target_id': str(target.id)},
         )
         assert resp.status_code == 200
         assert 'session_id' in resp.cookies
@@ -162,7 +163,7 @@ class TestStartImpersonation:
         client.cookies['csrf_token'] = 'user-csrf'
         resp = await client.post(
             '/api/v1/auth/admin/impersonate',
-            json={'target_email': 'target@example.com'},
+            json={'target_id': str(uuid7())},
         )
         assert resp.status_code == 403
 
@@ -176,7 +177,7 @@ class TestStartImpersonation:
     ) -> None:
         """T-016: Attempting to impersonate a superuser yields 403."""
         target = _make_target_user(role=UserRole.SUPERUSER)
-        mock_user_repo.get_by_email.return_value = target
+        mock_user_repo.get_by_id.return_value = target
         mock_session_service.start_impersonation.side_effect = (
             SuperuserImpersonationError()
         )
@@ -187,7 +188,7 @@ class TestStartImpersonation:
         client.cookies['csrf_token'] = 'admin-csrf'
         resp = await client.post(
             '/api/v1/auth/admin/impersonate',
-            json={'target_email': 'super@example.com'},
+            json={'target_id': str(target.id)},
         )
         assert resp.status_code == 403
         data = resp.json()
@@ -206,7 +207,7 @@ class TestStartImpersonation:
         admin_current = _make_admin_current()
         admin_current['user'].id = target.id
         admin_current['user'].email = 'admin@example.com'
-        mock_user_repo.get_by_email.return_value = target
+        mock_user_repo.get_by_id.return_value = target
         mock_session_service.start_impersonation.side_effect = (
             SelfImpersonationError()
         )
@@ -219,7 +220,7 @@ class TestStartImpersonation:
         client.cookies['csrf_token'] = 'admin-csrf'
         resp = await client.post(
             '/api/v1/auth/admin/impersonate',
-            json={'target_email': 'target@example.com'},
+            json={'target_id': str(target.id)},
         )
         assert resp.status_code == 400
         data = resp.json()
@@ -235,7 +236,7 @@ class TestStartImpersonation:
     ) -> None:
         """T-018: Non-ACTIVE target yields 409."""
         target = _make_target_user(status=UserStatus.SUSPENDED)
-        mock_user_repo.get_by_email.return_value = target
+        mock_user_repo.get_by_id.return_value = target
         mock_session_service.start_impersonation.side_effect = (
             TargetNotActiveError()
         )
@@ -246,7 +247,7 @@ class TestStartImpersonation:
         client.cookies['csrf_token'] = 'admin-csrf'
         resp = await client.post(
             '/api/v1/auth/admin/impersonate',
-            json={'target_email': 'suspended@example.com'},
+            json={'target_id': str(target.id)},
         )
         assert resp.status_code == 409
         data = resp.json()
@@ -260,8 +261,8 @@ class TestStartImpersonation:
         mock_session_service: MagicMock,
         mock_user_repo: MagicMock,
     ) -> None:
-        """Unknown target email returns 404."""
-        mock_user_repo.get_by_email.return_value = None
+        """Unknown target id returns 404."""
+        mock_user_repo.get_by_id.return_value = None
 
         await self._setup(app, mock_session_service, mock_user_repo)
 
@@ -269,7 +270,7 @@ class TestStartImpersonation:
         client.cookies['csrf_token'] = 'admin-csrf'
         resp = await client.post(
             '/api/v1/auth/admin/impersonate',
-            json={'target_email': 'unknown@example.com'},
+            json={'target_id': str(uuid7())},
         )
         assert resp.status_code == 404
 
@@ -283,7 +284,7 @@ class TestStartImpersonation:
     ) -> None:
         """T-037: Impersonation starts even when target has many sessions."""
         target = _make_target_user()
-        mock_user_repo.get_by_email.return_value = target
+        mock_user_repo.get_by_id.return_value = target
 
         fake_session = Session(
             id=uuid7(),
@@ -312,7 +313,7 @@ class TestStartImpersonation:
         client.cookies['csrf_token'] = 'admin-csrf'
         resp = await client.post(
             '/api/v1/auth/admin/impersonate',
-            json={'target_email': 'target@example.com'},
+            json={'target_id': str(target.id)},
         )
         # Succeeds (bypass) instead of 429 TooManyActiveSessions
         assert resp.status_code == 200
@@ -450,15 +451,21 @@ class TestStopImpersonationIdleSlide:
 
 
 class TestChangeRole:
-    """T-029: Tests for POST /api/v1/auth/admin/roles."""
+    """T-029/T-005: Tests for POST /api/v1/auth/admin/roles.
+
+    Planned request schema uses ``target_id: UUID`` and
+    ``new_role: UserRole``; the service signature is
+    ``change_role(*, actor, target_id, new_role, ip, user_agent)``.
+    """
 
     @pytest.mark.asyncio
-    async def test_superuser_grants_role(
+    async def test_superuser_grants_role_calls_service_with_planned_kwargs(
         self,
         app: FastAPI,
         client: AsyncClient,
     ) -> None:
-        """Superuser grants SUPERUSER to a USER."""
+        """Superuser grants SUPERUSER; route forwards planned kwargs
+        including ip/user_agent extracted from the request."""
         app.dependency_overrides = {}
 
         actor = MagicMock()
@@ -474,18 +481,7 @@ class TestChangeRole:
 
         target = _make_target_user(role=UserRole.USER)
         mock_user_repo = MagicMock(spec=UserRepository)
-        mock_user_repo.get_by_email = AsyncMock(return_value=target)
-        mock_user_repo.update_role = AsyncMock(
-            return_value=UserDomain(
-                id=target.id,
-                username=target.username,
-                email=target.email,
-                first_name=target.first_name,
-                last_name=target.last_name,
-                role=UserRole.SUPERUSER,
-                status=target.status,
-            )
-        )
+        mock_user_repo.get_by_id = AsyncMock(return_value=target)
         app.dependency_overrides[get_user_repository] = lambda: mock_user_repo
 
         mock_role_service = MagicMock(spec=RoleService)
@@ -494,15 +490,22 @@ class TestChangeRole:
 
         client.cookies['session_id'] = str(uuid7())
         client.cookies['csrf_token'] = 'admin-csrf'
+        client.headers['user-agent'] = 'pytest-role-ua'
         resp = await client.post(
             '/api/v1/auth/admin/roles',
             json={
-                'target_email': 'target@example.com',
+                'target_id': str(target.id),
                 'new_role': 'superuser',
             },
         )
         assert resp.status_code == 200
         mock_role_service.change_role.assert_called_once()
+        kwargs = mock_role_service.change_role.call_args.kwargs
+        assert kwargs['actor'] is actor
+        assert kwargs['target_id'] == target.id
+        assert kwargs['new_role'] == UserRole.SUPERUSER
+        assert isinstance(kwargs['ip'], str)
+        assert kwargs['user_agent'] == 'pytest-role-ua'
 
     @pytest.mark.asyncio
     async def test_user_caller_denied_403(
@@ -528,7 +531,7 @@ class TestChangeRole:
         resp = await client.post(
             '/api/v1/auth/admin/roles',
             json={
-                'target_email': 'other@example.com',
+                'target_id': str(uuid7()),
                 'new_role': 'superuser',
             },
         )
@@ -558,7 +561,7 @@ class TestChangeRole:
         target = _make_target_user(role=UserRole.SUPERUSER)
         target.id = actor.id
         mock_user_repo = MagicMock(spec=UserRepository)
-        mock_user_repo.get_by_email = AsyncMock(return_value=target)
+        mock_user_repo.get_by_id = AsyncMock(return_value=target)
         app.dependency_overrides[get_user_repository] = lambda: mock_user_repo
 
         client.cookies['session_id'] = str(uuid7())
@@ -566,10 +569,87 @@ class TestChangeRole:
         resp = await client.post(
             '/api/v1/auth/admin/roles',
             json={
-                'target_email': 'target@example.com',
+                'target_id': str(target.id),
                 'new_role': 'user',
             },
         )
         assert resp.status_code == 403
         data = resp.json()
         assert data.get('error_code') == 'self_role_change'
+
+    @pytest.mark.asyncio
+    async def test_unknown_target_returns_404(
+        self,
+        app: FastAPI,
+        client: AsyncClient,
+    ) -> None:
+        """An unknown target_id yields 404, not a service call."""
+        app.dependency_overrides = {}
+
+        actor = MagicMock()
+        actor.id = uuid7()
+        actor.role = UserRole.SUPERUSER
+        admin_current = {
+            'user': actor,
+            'csrf_token': 'admin-csrf',
+            'is_impersonation': False,
+            'impersonator_session_id': None,
+        }
+        app.dependency_overrides[get_current_user] = lambda: admin_current
+
+        mock_user_repo = MagicMock(spec=UserRepository)
+        mock_user_repo.get_by_id = AsyncMock(return_value=None)
+        app.dependency_overrides[get_user_repository] = lambda: mock_user_repo
+
+        mock_role_service = MagicMock(spec=RoleService)
+        mock_role_service.change_role = AsyncMock()
+        app.dependency_overrides[get_role_service] = lambda: mock_role_service
+
+        client.cookies['session_id'] = str(uuid7())
+        client.cookies['csrf_token'] = 'admin-csrf'
+        resp = await client.post(
+            '/api/v1/auth/admin/roles',
+            json={
+                'target_id': str(uuid7()),
+                'new_role': 'superuser',
+            },
+        )
+        assert resp.status_code == 404
+        mock_role_service.change_role.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_invalid_role_returns_422(
+        self,
+        app: FastAPI,
+        client: AsyncClient,
+    ) -> None:
+        """An invalid role string is rejected by Pydantic (422), not
+        a manual 400 block."""
+        app.dependency_overrides = {}
+
+        actor = MagicMock()
+        actor.id = uuid7()
+        actor.role = UserRole.SUPERUSER
+        admin_current = {
+            'user': actor,
+            'csrf_token': 'admin-csrf',
+            'is_impersonation': False,
+            'impersonator_session_id': None,
+        }
+        app.dependency_overrides[get_current_user] = lambda: admin_current
+
+        target = _make_target_user(role=UserRole.USER)
+        mock_user_repo = MagicMock(spec=UserRepository)
+        mock_user_repo.get_by_id = AsyncMock(return_value=target)
+        app.dependency_overrides[get_user_repository] = lambda: mock_user_repo
+
+        client.cookies['session_id'] = str(uuid7())
+        client.cookies['csrf_token'] = 'admin-csrf'
+        resp = await client.post(
+            '/api/v1/auth/admin/roles',
+            json={
+                'target_id': str(target.id),
+                'new_role': 'wizard',
+            },
+        )
+        assert resp.status_code == 422

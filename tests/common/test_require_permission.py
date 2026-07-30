@@ -6,7 +6,11 @@ import pytest
 
 from questr.common.enums import UserRole
 from questr.common.exceptions import AuthorizationError
-from questr.common.permissions import Permission, require_permission
+from questr.common.permissions import (
+    Permission,
+    require_permission,
+    user_permissions,
+)
 
 
 class TestRequirePermission:
@@ -43,3 +47,22 @@ class TestRequirePermission:
         }
         result = dep(current)
         assert result is None
+
+
+class TestUserPermissions:
+    """user_permissions(user) returns the frozenset for the user's role."""
+
+    def test_user_has_no_permissions(self) -> None:
+        user = MagicMock(role=UserRole.USER)
+        assert user_permissions(user) == frozenset()
+
+    def test_superuser_has_both_permissions(self) -> None:
+        user = MagicMock(role=UserRole.SUPERUSER)
+        assert user_permissions(user) == frozenset({
+            Permission.IMPERSONATE_USERS,
+            Permission.MANAGE_ROLES,
+        })
+
+    def test_unknown_role_yields_empty(self) -> None:
+        user = MagicMock(role=None)
+        assert user_permissions(user) == frozenset()
