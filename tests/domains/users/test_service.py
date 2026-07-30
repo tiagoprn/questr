@@ -76,6 +76,13 @@ def mock_session_repo() -> MagicMock:
 
 
 @pytest.fixture
+def mock_audit_log_repo() -> MagicMock:
+    repo = MagicMock()
+    repo.create = AsyncMock()
+    return repo
+
+
+@pytest.fixture
 def mock_login_rate_limiter() -> MagicMock:
     limiter = MagicMock()
     limiter.check_login_allowed = AsyncMock()
@@ -104,11 +111,13 @@ def account_service(
 def session_service(
     mock_user_repo: MagicMock,
     mock_session_repo: MagicMock,
+    mock_audit_log_repo: MagicMock,
     mock_login_rate_limiter: MagicMock,
 ) -> SessionService:
     return SessionService(
         user_repo=mock_user_repo,
         session_repo=mock_session_repo,
+        audit_repo=mock_audit_log_repo,
         login_rate_limiter=mock_login_rate_limiter,
     )
 
@@ -705,6 +714,9 @@ class TestValidateSession:
         result = await session_service.validate_session(session_id)
 
         assert result is not None
+        assert result.user is not None
+        assert result.is_impersonation is False
+        assert result.impersonator_session_id is None
         mock_session_repo.update_last_activity.assert_called_once()
         # FR-005: the idle window slides forward from the request time.
         call = mock_session_repo.update_last_activity.call_args

@@ -13,7 +13,7 @@ from uuid import UUID, uuid7
 from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
 
-from questr.common.enums import UserRole, UserStatus
+from questr.common.enums import AuditAction, UserRole, UserStatus
 from questr.common.exceptions import (
     AccountBannedError,
     AccountSuspendedError,
@@ -25,6 +25,8 @@ from questr.common.exceptions import (
     UserAlreadyExistsError,
 )
 from questr.domains.users.repository import (
+    AuditLog,
+    AuditLogRepository,
     EmailVerification,
     EmailVerificationRepository,
     Session,
@@ -44,6 +46,22 @@ pwd_context = PasswordHash(hashers=[Argon2Hasher()])
 # Pre-computed Argon2 hash of a random password, used for the no-user
 # timing branch (TD-006).
 _DUMMY_HASH = pwd_context.hash('__questr_dummy_timing__')
+
+
+@dataclass
+class SessionPrincipal:
+    """Result of session validation: the user plus effective-user metadata.
+
+    Attributes:
+        user: The authenticated (or impersonated) user.
+        is_impersonation: Whether this session is an impersonation.
+        impersonator_session_id: If impersonating, the admin's original
+            session id (used for stop-impersonation linkage).
+    """
+
+    user: User
+    is_impersonation: bool = False
+    impersonator_session_id: UUID | None = None
 
 
 # ── Domain functions ─────────────────────────────────────────────────
@@ -257,19 +275,22 @@ class AccountService:
 
 
 class SessionService:
-    """Session lifecycle: login, validate, logout, logout_all.
+    """Session lifecycle: login, validate, logout, logout_all,
+    start_impersonation, stop_impersonation.
 
-    deps: user_repo, session_repo, login_rate_limiter.
+    deps: user_repo, session_repo, audit_repo, login_rate_limiter.
     """
 
     def __init__(
         self,
         user_repo: UserRepository,
         session_repo: SessionRepository,
+        audit_repo: AuditLogRepository,
         login_rate_limiter: LoginRateLimiter,
     ) -> None:
         self.user_repo = user_repo
         self.session_repo = session_repo
+        self.audit_repo = audit_repo
         self.login_rate_limiter = login_rate_limiter
 
     async def login(  # noqa: PLR0913, PLR0917, PLR0912
@@ -420,12 +441,14 @@ class SessionService:
             'csrf_token': csrf_raw,
         }
 
-    async def validate_session(self, session_id: UUID) -> User:
-        """Validate a session and return the owning User.
+    async def validate_session(self, session_id: UUID) -> SessionPrincipal:
+        """Validate a session and return a SessionPrincipal.
 
         Performs idle-expiry and absolute-expiry checks, deactivates
         expired sessions, and eagerly updates last_activity on valid
-        sessions.
+        sessions. For impersonation sessions, sets
+        ``is_impersonation=True`` and carries the admin's original
+        session id for stop-impersonation linkage.
 
         Raises:
             AuthenticationError: if session is invalid or expired.
@@ -459,7 +482,15 @@ class SessionService:
         user = await self.user_repo.get_by_id(session.user_id)
         if user is None:
             raise AuthenticationError('Not authenticated')
-        return user
+
+        is_impersonation = session.impersonator_id is not None
+        return SessionPrincipal(
+            user=user,
+            is_impersonation=is_impersonation,
+            impersonator_session_id=session.impersonator_session_id
+            if is_impersonation
+            else None,
+        )
 
     async def logout(self, session_id: UUID) -> None:
         """Deactivate the current session."""
@@ -471,3 +502,254 @@ class SessionService:
         Returns the number of revoked sessions.
         """
         return await self.session_repo.revoke_all_for_user(user_id)
+
+    async def start_impersonation(  # noqa: PLR0913, PLR0917
+        self,
+        admin_user: User,
+        admin_session_id: UUID,
+        target_user: User,
+        client_ip: str,
+        user_agent: str,
+        reason: str | None = None,
+    ) -> dict:
+        """Start an impersonation session as the target user.
+
+        Creates a new session for the target user linked back to the
+        admin session, with a 60-minute absolute time-box, and writes
+        an IMPERSONATION_START audit row.
+
+        Returns a dict with keys ``user``, ``session``, ``csrf_token``
+        (matching the shape of ``login()``).
+
+        Raises:
+            SelfImpersonationError: if admin and target are the same.
+            SuperuserImpersonationError: if the target is a SUPERUSER.
+            TargetNotActiveError: if the target is not ACTIVE.
+        """
+        # Guard: no-self
+        if admin_user.id == target_user.id:
+            from questr.common.exceptions import (  # noqa: PLC0415
+                SelfImpersonationError,
+            )
+
+            raise SelfImpersonationError()
+
+        # Guard: no-superuser
+        if target_user.role == UserRole.SUPERUSER:
+            from questr.common.exceptions import (  # noqa: PLC0415
+                SuperuserImpersonationError,
+            )
+
+            raise SuperuserImpersonationError()
+
+        # Guard: active-only
+        if target_user.status != UserStatus.ACTIVE:
+            from questr.common.exceptions import (  # noqa: PLC0415
+                TargetNotActiveError,
+            )
+
+            raise TargetNotActiveError()
+
+        # Mint CSRF token
+        csrf_raw = secrets.token_urlsafe(32)
+        csrf_hash = hashlib.sha256(csrf_raw.encode()).hexdigest()
+
+        # Create impersonation session: 60-minute absolute time-box
+        now = datetime.now(timezone.utc)
+        absolute_expires_at = now + timedelta(hours=1)
+        expires_at = now + timedelta(minutes=settings.SESSION_IDLE_MINUTES)
+
+        impersonation_session = Session(
+            id=uuid7(),
+            user_id=target_user.id,
+            issued_at=now,
+            last_activity=now,
+            expires_at=expires_at,
+            absolute_expires_at=absolute_expires_at,
+            remember_me=False,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            csrf_token_hash=csrf_hash,
+            is_active=True,
+            impersonator_id=admin_user.id,
+            impersonator_session_id=admin_session_id,
+        )
+        created_session = await self.session_repo.create(impersonation_session)
+
+        # Write audit row
+        await self.audit_repo.create(
+            AuditLog(
+                action=AuditAction.IMPERSONATION_START,
+                actor_id=admin_user.id,
+                target_id=target_user.id,
+                impersonator_id=admin_user.id,
+                impersonator_session_id=admin_session_id,
+                started_at=now,
+                reason=reason,
+                ip_address=client_ip,
+                user_agent=user_agent,
+            ),
+        )
+
+        return {
+            'user': target_user,
+            'session': created_session,
+            'csrf_token': csrf_raw,
+        }
+
+    async def stop_impersonation(  # noqa: PLR0913
+        self,
+        impersonation_session_id: UUID,
+    ) -> dict:
+        """Stop impersonation and restore the admin session.
+
+        Validates the impersonation session (must be active, must be
+        an impersonation), re-validates the linked admin session,
+        checks the admin session belongs to the same user as the
+        impersonator, deactivates the impersonation session, writes
+        an IMPERSONATION_END audit row, and rotates the admin
+        session's CSRF token.
+
+        Returns a dict with keys ``admin_session_id`` and
+        ``csrf_token`` for the route to set cookies.
+
+        Raises:
+            AuthenticationError: if the impersonation session is
+                invalid, expired, not impersonating, or the admin
+                session is gone/expired/deactivated.
+        """
+        # Validate the impersonation session
+        session = await self.session_repo.get_by_id(impersonation_session_id)
+        if session is None or not session.is_active:
+            raise AuthenticationError('Not authenticated')
+
+        now = datetime.now(timezone.utc)
+
+        # Absolute expiry check
+        if (
+            session.absolute_expires_at is not None
+            and now >= session.absolute_expires_at
+        ):
+            await self.session_repo.deactivate(impersonation_session_id)
+            raise AuthenticationError('Session expired')
+
+        # Idle expiry check
+        if session.expires_at is not None and now >= session.expires_at:
+            await self.session_repo.deactivate(impersonation_session_id)
+            raise AuthenticationError('Session expired')
+
+        # Gate: must be an impersonation session
+        if session.impersonator_id is None:
+            raise AuthenticationError('Not authenticated')
+
+        # Re-validate the linked admin session
+        admin_session = await self.session_repo.get_by_id(
+            session.impersonator_session_id
+        )
+        if (
+            admin_session is None
+            or not admin_session.is_active
+            or admin_session.user_id != session.impersonator_id
+        ):
+            # Admin session is gone/expired/deactivated or belongs to
+            # a different user -> graceful degrade (401).
+            raise AuthenticationError('Not authenticated')
+
+        # Deactivate the impersonation session
+        await self.session_repo.deactivate(impersonation_session_id)
+
+        # Slide the admin session's idle window (accepted residual:
+        # validating the admin session at stop time slides its idle
+        # window, matching user expectation for an active session).
+        new_expiry = now + timedelta(minutes=settings.SESSION_IDLE_MINUTES)
+        await self.session_repo.update_last_activity(
+            admin_session.id, now, new_expiry
+        )
+
+        # Write audit row
+        await self.audit_repo.create(
+            AuditLog(
+                action=AuditAction.IMPERSONATION_END,
+                actor_id=session.impersonator_id,
+                target_id=session.user_id,
+                impersonator_id=session.impersonator_id,
+                impersonator_session_id=session.impersonator_session_id,
+                ended_at=now,
+                ip_address=session.ip_address,
+                user_agent=session.user_agent,
+            ),
+        )
+
+        # Rotate the admin session's CSRF token
+        csrf_raw = secrets.token_urlsafe(32)
+        csrf_hash = hashlib.sha256(csrf_raw.encode()).hexdigest()
+        await self.session_repo.update_csrf_hash(admin_session.id, csrf_hash)
+
+        return {
+            'admin_session_id': admin_session.id,
+            'csrf_token': csrf_raw,
+        }
+
+
+class RoleService:
+    """Role management: change_role with audit trail.
+
+    deps: user_repo, audit_repo.
+    """
+
+    def __init__(
+        self,
+        user_repo: UserRepository,
+        audit_repo: AuditLogRepository,
+    ) -> None:
+        self.user_repo = user_repo
+        self.audit_repo = audit_repo
+
+    async def change_role(
+        self,
+        actor_id: UUID,
+        target_user: User,
+        new_role: UserRole,
+    ) -> User:
+        """Change a user's role and write a ROLE_GRANTED/ROLE_REVOKED
+        audit row.
+
+        Args:
+            actor_id: The user performing the change.
+            target_user: The user whose role is changing.
+            new_role: The new role to assign.
+
+        Returns:
+            The updated user.
+
+        Raises:
+            AuthenticationError: if the target is not found.
+        """
+        old_role = target_user.role
+
+        # Update via repository (the ORM model handles persistence)
+        updated = await self.user_repo.update_role(target_user.id, new_role)
+        if updated is None:
+            raise AuthenticationError('User not found')
+
+        # Determine action: grant if promoted (or same), revoke if
+        # demoted to a lesser role.
+        role_hierarchy = {UserRole.USER: 0, UserRole.SUPERUSER: 1}
+        old_level = role_hierarchy.get(old_role, 0)
+        new_level = role_hierarchy.get(new_role, 0)
+        action = (
+            AuditAction.ROLE_GRANTED
+            if new_level >= old_level
+            else AuditAction.ROLE_REVOKED
+        )
+        await self.audit_repo.create(
+            AuditLog(
+                action=action,
+                actor_id=actor_id,
+                target_id=target_user.id,
+                old_role=str(old_role.value) if old_role else None,
+                new_role=str(new_role.value),
+            ),
+        )
+
+        return updated

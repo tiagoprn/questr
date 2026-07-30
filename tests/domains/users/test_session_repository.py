@@ -188,3 +188,22 @@ class TestSessionRepository:
         assert fetched.expires_at is not None
         expiry_diff = (fetched.expires_at - new_expiry).total_seconds()
         assert abs(expiry_diff) < 1  # noqa: PLR2004
+
+    async def test_update_csrf_hash_rotates_token(
+        self,
+        session_repo: SessionRepository,
+        db_session: AsyncSession,
+    ) -> None:
+        """T-036: update_csrf_hash replaces the stored hash on a session."""
+        user = await self._create_user(db_session)
+        session = await self._build_session(user.id)
+        created = await session_repo.create(session)
+        old_hash = created.csrf_token_hash
+
+        new_hash = 'n' * 64
+        await session_repo.update_csrf_hash(created.id, new_hash)
+
+        fetched = await session_repo.get_by_id(created.id)
+        assert fetched is not None
+        assert fetched.csrf_token_hash == new_hash
+        assert fetched.csrf_token_hash != old_hash

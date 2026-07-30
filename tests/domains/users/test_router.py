@@ -17,7 +17,10 @@ from questr.common.exceptions import (
     TooManyActiveSessionsError,
 )
 from questr.domains.users.api import get_session_service
-from questr.domains.users.service import SessionService
+from questr.domains.users.service import (
+    SessionPrincipal,
+    SessionService,
+)
 from questr.infrastructure.email import (
     BaseEmailService,
     get_email_service,
@@ -382,8 +385,13 @@ class TestGetCurrentUser:
             status=UserStatus.ACTIVE,
             created_at=datetime.now(timezone.utc),
         )
+        mock_principal = SessionPrincipal(
+            user=mock_user,
+            is_impersonation=False,
+            impersonator_session_id=None,
+        )
         svc = MagicMock(spec=SessionService)
-        svc.validate_session = AsyncMock(return_value=mock_user)
+        svc.validate_session = AsyncMock(return_value=mock_principal)
         overrides = {get_session_service: lambda: svc}
         app.dependency_overrides.update(overrides)
 
@@ -394,3 +402,5 @@ class TestGetCurrentUser:
         data = resp.json()
         assert 'csrf_token' in data
         assert data['csrf_token'] == 'echoed-csrf-token'
+        assert data['is_impersonation'] is False
+        assert data['impersonator_session_id'] is None

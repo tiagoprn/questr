@@ -1,4 +1,3 @@
-
 import asyncio
 
 from scripts.fast_shell import UserORMModel, select, session

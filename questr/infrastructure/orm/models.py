@@ -115,5 +115,44 @@ class SessionORMModel(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True
     )
+    impersonator_id: Mapped[UUID | None] = mapped_column(SAUUID, nullable=True)
+    impersonator_session_id: Mapped[UUID | None] = mapped_column(
+        SAUUID, nullable=True
+    )
 
     user: Mapped['UserORMModel'] = relationship(back_populates='sessions')
+
+
+class AuditLogORMModel(Base):
+    __tablename__ = 'audit_log'
+
+    __table_args__ = (
+        Index('idx_audit_log_action', 'action'),
+        Index('idx_audit_log_actor_id', 'actor_id'),
+        Index('idx_audit_log_target_id', 'target_id'),
+    )
+
+    id: Mapped[UUID] = mapped_column(SAUUID, primary_key=True)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)
+    actor_id: Mapped[UUID | None] = mapped_column(SAUUID, nullable=True)
+    target_id: Mapped[UUID | None] = mapped_column(SAUUID, nullable=True)
+    impersonator_id: Mapped[UUID | None] = mapped_column(SAUUID, nullable=True)
+    impersonator_session_id: Mapped[UUID | None] = mapped_column(
+        SAUUID, nullable=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    old_role: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    new_role: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )

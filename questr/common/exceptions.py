@@ -91,3 +91,31 @@ class RateLimitExceededError(StructuredQuestrException):
 
     def __init__(self, message: str = '') -> None:
         super().__init__(error_code='rate_limited', message=message)
+
+
+class AuthorizationError(StructuredQuestrException):
+    """Raised when a user lacks the required permission."""
+
+    def __init__(self, message: str = '') -> None:
+        super().__init__(error_code='authorization', message=message)
+
+
+class SelfImpersonationError(StructuredQuestrException):
+    """Raised when an admin tries to impersonate themselves."""
+
+    def __init__(self, message: str = '') -> None:
+        super().__init__(error_code='self_impersonation', message=message)
+
+
+class SuperuserImpersonationError(StructuredQuestrException):
+    """Raised when attempting to impersonate a superuser."""
+
+    def __init__(self, message: str = '') -> None:
+        super().__init__(error_code='superuser_impersonation', message=message)
+
+
+class TargetNotActiveError(StructuredQuestrException):
+    """Raised when the impersonation target is not ACTIVE."""
+
+    def __init__(self, message: str = '') -> None:
+        super().__init__(error_code='target_not_active', message=message)

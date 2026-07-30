@@ -11,3 +11,10 @@ class UserStatus(str, Enum):
     ACTIVE = 'active'
     SUSPENDED = 'suspended'
     BANNED = 'banned'
+
+
+class AuditAction(str, Enum):
+    IMPERSONATION_START = 'impersonation_start'
+    IMPERSONATION_END = 'impersonation_end'
+    ROLE_GRANTED = 'role_granted'
+    ROLE_REVOKED = 'role_revoked'

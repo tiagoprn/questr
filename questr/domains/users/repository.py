@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from questr.common.enums import UserRole, UserStatus
 from questr.infrastructure.orm.models import (
+    AuditLogORMModel,
     EmailVerificationORMModel,
     SessionORMModel,
     UserORMModel,
@@ -46,6 +47,28 @@ class Session:
     user_agent: str = ''
     csrf_token_hash: str = ''
     is_active: bool = True
+    impersonator_id: UUID | None = None
+    impersonator_session_id: UUID | None = None
+
+
+@dataclass
+class AuditLog:
+    """Audit log entry domain object."""
+
+    id: UUID | None = None
+    action: str = ''
+    actor_id: UUID | None = None
+    target_id: UUID | None = None
+    impersonator_id: UUID | None = None
+    impersonator_session_id: UUID | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    old_role: str | None = None
+    new_role: str | None = None
+    reason: str | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+    created_at: datetime | None = None
 
 
 @dataclass
@@ -113,6 +136,19 @@ class UserRepository:
         # expire the attribute on flush and force a lazy refresh, which
         # raises MissingGreenlet in async sessions; it also uses the DB
         # clock, which freezegun cannot control.
+        orm_user.updated_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return self._to_domain(orm_user)
+
+    async def update_role(self, user_id: UUID, role: UserRole) -> User | None:
+        """Update a user's role."""
+        result = await self.session.execute(
+            select(UserORMModel).where(UserORMModel.id == user_id)
+        )
+        orm_user = result.scalar_one_or_none()
+        if orm_user is None:
+            return None
+        orm_user.role = role
         orm_user.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
         return self._to_domain(orm_user)
@@ -214,6 +250,8 @@ class SessionRepository:
             user_agent=session_obj.user_agent,
             csrf_token_hash=session_obj.csrf_token_hash,
             is_active=session_obj.is_active,
+            impersonator_id=session_obj.impersonator_id,
+            impersonator_session_id=session_obj.impersonator_session_id,
         )
         self.session.add(orm_session)
         await self.session.flush()
@@ -279,6 +317,23 @@ class SessionRepository:
         )
         await self.session.flush()
 
+    async def update_csrf_hash(
+        self,
+        session_id: UUID,
+        csrf_token_hash: str,
+    ) -> None:
+        """Replace the stored CSRF token hash on a session row.
+
+        Used by stop-impersonation to rotate the admin session's CSRF
+        token after the impersonation ends.
+        """
+        await self.session.execute(
+            update(SessionORMModel)
+            .where(SessionORMModel.id == session_id)
+            .values(csrf_token_hash=csrf_token_hash)
+        )
+        await self.session.flush()
+
     @staticmethod
     def _to_domain(orm_s: SessionORMModel) -> Session:
         return Session(
@@ -293,4 +348,56 @@ class SessionRepository:
             user_agent=orm_s.user_agent,
             csrf_token_hash=orm_s.csrf_token_hash,
             is_active=orm_s.is_active,
+            impersonator_id=orm_s.impersonator_id,
+            impersonator_session_id=orm_s.impersonator_session_id,
+        )
+
+
+class AuditLogRepository:
+    """Insert-only repository for audit log entries."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(self, entry: AuditLog) -> AuditLog:
+        """Persist a new audit log entry.
+
+        No update or delete methods: append-only discipline.
+        """
+        orm_entry = AuditLogORMModel(
+            id=entry.id or uuid7(),
+            action=entry.action,
+            actor_id=entry.actor_id,
+            target_id=entry.target_id,
+            impersonator_id=entry.impersonator_id,
+            impersonator_session_id=entry.impersonator_session_id,
+            started_at=entry.started_at,
+            ended_at=entry.ended_at,
+            old_role=entry.old_role,
+            new_role=entry.new_role,
+            reason=entry.reason,
+            ip_address=entry.ip_address,
+            user_agent=entry.user_agent,
+        )
+        self.session.add(orm_entry)
+        await self.session.flush()
+        return self._to_domain(orm_entry)
+
+    @staticmethod
+    def _to_domain(orm_e: AuditLogORMModel) -> AuditLog:
+        return AuditLog(
+            id=orm_e.id,
+            action=orm_e.action,
+            actor_id=orm_e.actor_id,
+            target_id=orm_e.target_id,
+            impersonator_id=orm_e.impersonator_id,
+            impersonator_session_id=orm_e.impersonator_session_id,
+            started_at=orm_e.started_at,
+            ended_at=orm_e.ended_at,
+            old_role=orm_e.old_role,
+            new_role=orm_e.new_role,
+            reason=orm_e.reason,
+            ip_address=orm_e.ip_address,
+            user_agent=orm_e.user_agent,
+            created_at=orm_e.created_at,
         )

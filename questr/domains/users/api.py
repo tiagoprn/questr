@@ -9,12 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from questr.app.dependencies import T_ClientIP
 from questr.common.enums import UserRole, UserStatus
 from questr.common.exceptions import AuthenticationError
+from questr.common.permissions import Permission, require_permission
 from questr.domains.users.repository import (
+    AuditLogRepository,
     EmailVerificationRepository,
     SessionRepository,
     UserRepository,
 )
-from questr.domains.users.service import AccountService, SessionService
+from questr.domains.users.service import (
+    AccountService,
+    RoleService,
+    SessionService,
+)
 from questr.infrastructure.email import (
     BaseEmailService,
     get_email_service,
@@ -122,9 +128,21 @@ class LogoutAllResponse(BaseModel):
     sessions_revoked: int
 
 
+class ImpersonateRequest(BaseModel):
+    target_email: str
+    reason: str | None = None
+
+
+class ChangeRoleRequest(BaseModel):
+    target_email: str
+    new_role: str
+
+
 class MeResponse(BaseModel):
     user: _UserResponse
     csrf_token: str
+    is_impersonation: bool = False
+    impersonator_session_id: str | None = None
 
 
 # ── Dependencies ──────────────────────────────────────────────────────
@@ -179,11 +197,23 @@ T_LoginRateLimiter = Annotated[
 ]
 
 
+async def get_audit_log_repository(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+) -> AuditLogRepository:
+    return AuditLogRepository(session)
+
+
+T_AuditLogRepo = Annotated[
+    AuditLogRepository, Depends(get_audit_log_repository)
+]
+
+
 async def get_session_service(
     user_repo: Annotated[UserRepository, Depends(get_user_repository)],
     session_repo: Annotated[
         SessionRepository, Depends(get_session_repository)
     ],
+    audit_repo: T_AuditLogRepo,
     login_rate_limiter: Annotated[
         LoginRateLimiter, Depends(get_login_rate_limiter)
     ],
@@ -191,11 +221,25 @@ async def get_session_service(
     return SessionService(
         user_repo=user_repo,
         session_repo=session_repo,
+        audit_repo=audit_repo,
         login_rate_limiter=login_rate_limiter,
     )
 
 
 T_SessionService = Annotated[SessionService, Depends(get_session_service)]
+
+
+async def get_role_service(
+    user_repo: T_UserRepo,
+    audit_repo: T_AuditLogRepo,
+) -> RoleService:
+    return RoleService(
+        user_repo=user_repo,
+        audit_repo=audit_repo,
+    )
+
+
+T_RoleService = Annotated[RoleService, Depends(get_role_service)]
 
 
 async def get_current_user(
@@ -212,7 +256,7 @@ async def get_current_user(
     except ValueError:
         raise AuthenticationError('Not authenticated') from None
     try:
-        user = await session_service.validate_session(session_uuid)
+        principal = await session_service.validate_session(session_uuid)
     except AuthenticationError:
         # FR-005: persist the expired-session invalidation. On the
         # exception path the get_async_session teardown commit is
@@ -223,7 +267,12 @@ async def get_current_user(
     # The CSRF token isn't stored in the service; the API layer
     # re-echoes it from the session. We rely on the cookie.
     csrf_token = request.cookies.get('csrf_token', '')
-    return {'user': user, 'csrf_token': csrf_token}
+    return {
+        'user': principal.user,
+        'csrf_token': csrf_token,
+        'is_impersonation': principal.is_impersonation,
+        'impersonator_session_id': principal.impersonator_session_id,
+    }
 
 
 T_CurrentUser = Annotated[dict, Depends(get_current_user)]
@@ -446,4 +495,204 @@ async def me(
     return MeResponse(
         user=_UserResponse.model_validate(current['user']),
         csrf_token=current['csrf_token'],
+        is_impersonation=current.get('is_impersonation', False),
+        impersonator_session_id=(
+            str(current['impersonator_session_id'])
+            if current.get('impersonator_session_id')
+            else None
+        ),
+    )
+
+
+@router.post(
+    '/admin/impersonate',
+    dependencies=[Depends(require_permission(Permission.IMPERSONATE_USERS))],
+    responses={
+        400: {'description': 'Self impersonation'},
+        403: {'description': 'Superuser target or missing permission'},
+        404: {'description': 'Target user not found'},
+        409: {'description': 'Target not active'},
+    },
+)
+async def start_impersonation_route(
+    payload: ImpersonateRequest,
+    current: T_CurrentUser,
+    user_repo: T_UserRepo,
+    session_service: T_SessionService,
+    request: Request,
+) -> Response:
+    """Start an impersonation session as the target user."""
+    admin_user = current['user']
+    admin_session_id = UUID(request.cookies.get('session_id', ''))
+
+    target_user = await user_repo.get_by_email(payload.target_email)
+    if target_user is None:
+        from fastapi.responses import JSONResponse  # noqa: PLC0415
+
+        return JSONResponse(
+            status_code=404,
+            content={'detail': 'User not found'},
+        )
+
+    client_ip = request.client.host if request.client else '127.0.0.1'
+    user_agent = request.headers.get('user-agent', '')
+
+    result = await session_service.start_impersonation(
+        admin_user=admin_user,
+        admin_session_id=admin_session_id,
+        target_user=target_user,
+        client_ip=client_ip,
+        user_agent=user_agent,
+        reason=payload.reason,
+    )
+
+    session = result['session']
+    response = Response(status_code=200)
+    response.set_cookie(
+        key='session_id',
+        value=str(session.id),
+        path='/api/v1/auth',
+        secure=settings.SECURE_COOKIE,
+        httponly=True,
+        samesite='lax',
+    )
+    response.set_cookie(
+        key='csrf_token',
+        value=result['csrf_token'],
+        path='/api/v1/auth',
+        secure=settings.SECURE_COOKIE,
+        httponly=False,
+        samesite='lax',
+    )
+    return response
+
+
+@router.post(
+    '/admin/impersonate/stop',
+    responses={
+        401: {'description': 'Not authenticated or session expired'},
+    },
+)
+async def stop_impersonation_route(
+    current: T_CurrentUser,
+    session_service: T_SessionService,
+    request: Request,
+) -> Response:
+    """Stop impersonation and restore the admin session.
+
+    The ``is_impersonation`` gate protects against replay (a
+    non-impersonation session calling this endpoint). The service
+    re-validates the linked admin session; if it expired or was
+    deactivated mid-impersonation, the response degrades to a 401
+    JSON error so the frontend routes to login (no 500, no session
+    flip).
+    """
+    session_id_str = request.cookies.get('session_id')
+    if session_id_str is None:
+        return _unauthorized_response()
+
+    try:
+        session_uuid = UUID(session_id_str)
+    except ValueError:
+        return _unauthorized_response()
+
+    try:
+        result = await session_service.stop_impersonation(
+            impersonation_session_id=session_uuid,
+        )
+    except AuthenticationError:
+        return _unauthorized_response()
+
+    admin_session_id = result['admin_session_id']
+    csrf_raw = result['csrf_token']
+
+    response = Response(status_code=200)
+    response.set_cookie(
+        key='session_id',
+        value=str(admin_session_id),
+        path='/api/v1/auth',
+        secure=settings.SECURE_COOKIE,
+        httponly=True,
+        samesite='lax',
+    )
+    response.set_cookie(
+        key='csrf_token',
+        value=csrf_raw,
+        path='/api/v1/auth',
+        secure=settings.SECURE_COOKIE,
+        httponly=False,
+        samesite='lax',
+    )
+    return response
+
+
+@router.post(
+    '/admin/roles',
+    dependencies=[Depends(require_permission(Permission.MANAGE_ROLES))],
+    responses={
+        400: {'description': 'Invalid role'},
+        403: {'description': 'Missing permission or self-change'},
+        404: {'description': 'Target user not found'},
+    },
+)
+async def change_role_route(
+    payload: ChangeRoleRequest,
+    current: T_CurrentUser,
+    user_repo: T_UserRepo,
+    role_service: T_RoleService,
+) -> Response:
+    """Change a user's role. The actor may NOT change their own role
+    (blocks self-demotion lockout).
+    """
+    actor = current['user']
+
+    target = await user_repo.get_by_email(payload.target_email)
+    if target is None:
+        from fastapi.responses import JSONResponse  # noqa: PLC0415
+
+        return JSONResponse(
+            status_code=404,
+            content={'detail': 'User not found'},
+        )
+
+    # Guard: no self-change
+    if target.id == actor.id:
+        from fastapi.responses import JSONResponse  # noqa: PLC0415
+
+        return JSONResponse(
+            status_code=403,
+            content={
+                'detail': 'Cannot change your own role',
+                'error_code': 'self_role_change',
+            },
+        )
+
+    try:
+        new_role = UserRole(payload.new_role)
+    except ValueError:
+        from fastapi.responses import JSONResponse  # noqa: PLC0415
+
+        return JSONResponse(
+            status_code=400,
+            content={
+                'detail': f'Invalid role: {payload.new_role}',
+            },
+        )
+
+    await role_service.change_role(
+        actor_id=actor.id,
+        target_user=target,
+        new_role=new_role,
+    )
+
+    return Response(status_code=200)
+
+
+def _unauthorized_response() -> Response:
+    """Return a 401 JSON response for failed authentication."""
+    from fastapi.responses import JSONResponse  # noqa: PLC0415
+
+    return JSONResponse(
+        status_code=401,
+        content={'detail': 'Not authenticated'},
     )

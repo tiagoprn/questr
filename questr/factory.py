@@ -7,10 +7,14 @@ from questr.common.exceptions import (
     AccountBannedError,
     AccountSuspendedError,
     AuthenticationError,
+    AuthorizationError,
     EmailNotVerifiedError,
     InvalidVerificationTokenError,
     RateLimiterUnavailableError,
     RateLimitExceededError,
+    SelfImpersonationError,
+    SuperuserImpersonationError,
+    TargetNotActiveError,
     TooManyActiveSessionsError,
     UserAlreadyExistsError,
 )
@@ -67,6 +71,22 @@ def create_app() -> FastAPI:
     app.add_exception_handler(
         RateLimiterUnavailableError,
         _rate_limiter_unavailable_handler,
+    )
+    app.add_exception_handler(
+        AuthorizationError,
+        _authorization_error_handler,
+    )
+    app.add_exception_handler(
+        SelfImpersonationError,
+        _self_impersonation_handler,
+    )
+    app.add_exception_handler(
+        SuperuserImpersonationError,
+        _superuser_impersonation_handler,
+    )
+    app.add_exception_handler(
+        TargetNotActiveError,
+        _target_not_active_handler,
     )
 
     app.include_router(api_router)
@@ -158,4 +178,49 @@ async def _rate_limiter_unavailable_handler(
     return JSONResponse(
         status_code=503,
         content={'detail': str(exc)},
+    )
+
+
+async def _authorization_error_handler(
+    request: Request, exc: AuthorizationError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={'detail': str(exc), 'error_code': 'authorization'},
+    )
+
+
+async def _self_impersonation_handler(
+    request: Request, exc: SelfImpersonationError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content={
+            'detail': str(exc),
+            'error_code': 'self_impersonation',
+        },
+    )
+
+
+async def _superuser_impersonation_handler(
+    request: Request, exc: SuperuserImpersonationError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={
+            'detail': str(exc),
+            'error_code': 'superuser_impersonation',
+        },
+    )
+
+
+async def _target_not_active_handler(
+    request: Request, exc: TargetNotActiveError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={
+            'detail': str(exc),
+            'error_code': 'target_not_active',
+        },
     )
