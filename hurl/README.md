@@ -53,8 +53,8 @@ username=tiago002
 email=tiago+second@gmail.com
 first_name=tiago
 last_name=lima002
-password=SSelysium08!
-password_confirmation=SSelysium08!
+password=!DoBett3R!
+password_confirmation=!DoBett3R!
 ```
 
 ### Adding a new user
@@ -150,7 +150,7 @@ HTTP 401
 ```properties
 host=http://kvm-labs:8000
 email=tiago+third@gmail.com
-password=SSelysium08!
+password=!DoBett3R!
 remember_me=false
 ```
 

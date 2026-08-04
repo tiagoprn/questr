@@ -12,8 +12,8 @@ curl -X 'POST' \
   "email": "tiagoprn+professional@gmail.com",
   "first_name": "tiago",
   "last_name": "lima (professional)",
-  "password": "SSelysium08!",
-  "password_confirmation": "SSelysium08!"
+  "password": "!DoBett3R!",
+  "password_confirmation": "!DoBett3R!"
 }
 ' \
     && curl -X 'POST' \
@@ -28,7 +28,7 @@ curl -X 'POST' \
   "email": "tiagoprn+personal@gmail.com",
   "first_name": "tiago",
   "last_name": "lima",
-  "password": "SSelysium08!",
-  "password_confirmation": "SSelysium08!"
+  "password": "!DoBett3R!",
+  "password_confirmation": "!DoBett3R!"
 }
 '
