@@ -35,32 +35,32 @@ This is a full revamp of my original Questrya project, rebuilt from the ground u
 
 ### Local development server
 
-- Activate the uv virtualenv:
+#### 01) Reset containers, setup database and raise dev server
 
 ```bash
 
-source .venv/bin/activate
-
-```
-
-- Run the migrations:
-
-```bash
-
-make db-upgrade
-
-```
-
-- Raise the development server:
-
-```bash
-
+source .venv/bin/activate && \
+make docker-reset-all && \
+sleep 60 && \
+make db-upgrade  && \
 make dev-server
 
 ```
 
-- Mailpit WebUI is available at: <http://kvm-labs:8025/>
+#### 02) Seed the db with users, activate 2 of them and promote "supe" to superuser
 
+```bash
+
+source .venv/bin/activate && \
+make dev-hurl-create-users && \
+make shell SCRIPT=scripts/fast_shell/verify_user.py EMAIL=tiago+third@gmail.com && \
+make shell SCRIPT=scripts/fast_shell/verify_user.py EMAIL=tiago+supe@gmail.com && \
+make dev-hurl-auth-flow && \
+make shell SCRIPT=scripts/fast_shell/promote_superuser.py EMAIL=tiago+supe@gmail.com
+
+```
+
+> NOTE: Mailpit WebUI is available at: <http://kvm-labs:8025/>
 
 ### Database Migrations
 
