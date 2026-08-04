@@ -15,7 +15,7 @@ from questr.domains.users.repository import (
 from questr.domains.users.repository import (
     UserRepository,
 )
-from questr.infrastructure.orm.models import AuditLogORMModel, UserORMModel
+from questr.infrastructure.orm.models import AuditLogORMModel
 
 
 class TestBootstrapPromote:
@@ -39,30 +39,8 @@ class TestBootstrapPromote:
         )
         await user_repo.create(user)
 
-        # Execute the promote logic directly (same as the script)
-        result = await db_session.execute(
-            select(UserORMModel).where(
-                UserORMModel.email == 'promote@test.com'
-            )
-        )
-        orm_user = result.scalar_one_or_none()
-        assert orm_user is not None
-        assert orm_user.role == UserRole.USER
-
-        old_role = orm_user.role.value
-        orm_user.role = UserRole.SUPERUSER
-
-        audit_log_id = uuid7()
-        audit_entry = AuditLogORMModel(
-            id=audit_log_id,
-            action=AuditAction.ROLE_GRANTED,
-            actor_id=None,
-            target_id=orm_user.id,
-            old_role=old_role,
-            new_role=UserRole.SUPERUSER.value,
-        )
-        db_session.add(audit_entry)
-        await db_session.flush()
+        ps.session = db_session
+        await ps.promote('promote@test.com')
 
         # Verify role changed
         fetched = await user_repo.get_by_id(user.id)
@@ -70,12 +48,18 @@ class TestBootstrapPromote:
         assert fetched.role == UserRole.SUPERUSER
 
         # Verify audit row
-        audit_entry_db = await db_session.get(AuditLogORMModel, audit_log_id)
+        result = await db_session.execute(
+            select(AuditLogORMModel).where(
+                AuditLogORMModel.target_id == user.id
+            )
+        )
+        audit_entry_db = result.scalar_one_or_none()
         assert audit_entry_db is not None
         assert audit_entry_db.action == AuditAction.ROLE_GRANTED
         assert audit_entry_db.actor_id is None
         assert audit_entry_db.old_role == 'user'
         assert audit_entry_db.new_role == 'superuser'
+        assert audit_entry_db.user_agent == 'fast_shell'
 
 
 class TestBootstrapPromoteGuard:

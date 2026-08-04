@@ -10,26 +10,23 @@ Only ACTIVE users may be promoted out-of-band.
 """
 
 import asyncio
-from uuid import uuid7
+import os
 
-from scripts.fast_shell import (
-    AuditAction,
-    AuditLogORMModel,
-    UserORMModel,
-    UserRole,
-    UserStatus,
-    select,
-    session,
+from questr.common.enums import AuditAction, UserRole, UserStatus
+from questr.domains.users.repository import (
+    AuditLog,
+    AuditLogRepository,
+    UserRepository,
 )
+from scripts.fast_shell import session
 
 
 async def promote(email: str) -> None:
     """Promote a user to SUPERUSER by email."""
-    result = await session.execute(
-        select(UserORMModel).where(UserORMModel.email == email)
-    )
-    user = result.scalar_one_or_none()
+    user_repo = UserRepository(session=session)
+    audit_repo = AuditLogRepository(session=session)
 
+    user = await user_repo.get_by_email(email)
     if user is None:
         print(f'User with email "{email}" not found.')
         return
@@ -45,32 +42,44 @@ async def promote(email: str) -> None:
         )
         return
 
-    old_role = user.role.value
-    user.role = UserRole.SUPERUSER
+    old_role = user.role
+    updated = await user_repo.update_role(user.id, UserRole.SUPERUSER)
+    if updated is None:
+        print(f'User "{email}" could not be promoted.')
+        return
 
-    audit_entry = AuditLogORMModel(
-        id=uuid7(),
-        action=AuditAction.ROLE_GRANTED,
-        actor_id=None,
-        target_id=user.id,
-        old_role=old_role,
-        new_role=UserRole.SUPERUSER.value,
+    audit = await audit_repo.insert(
+        AuditLog(
+            action=AuditAction.ROLE_GRANTED,
+            actor_id=None,
+            target_id=user.id,
+            old_role=old_role,
+            new_role=UserRole.SUPERUSER,
+            # Out-of-band marker: differentiates script-originated audit
+            # rows. ip_address is intentionally NOT set (Captain, 2026-08-04).
+            user_agent='fast_shell',
+        )
     )
-    session.add(audit_entry)
 
-    await session.flush()
+    # shell.py does NOT auto-commit; without this the changes roll back
+    # when the session closes.
+    await session.commit()
     print(
-        f'Promoted "{email}" from {old_role} to superuser. '
-        f'Audit log id: {audit_entry.id}'
+        f'Promoted "{email}" from {old_role.value} to superuser. '
+        f'Audit log id: {audit.id}'
     )
 
 
-if __name__ == '__main__':
-    import sys
-
-    if len(sys.argv) < 2:  # noqa: PLR2004
-        print('Usage: python promote_superuser.py <email>')
-        sys.exit(1)
-
-    email = sys.argv[1]
+# NOTE: runpy.run_path (make shell) executes the module with
+# __name__ == '<run_path>', so a plain __main__ guard would never fire.
+# This dual guard keeps the module importable for tests while still
+# running under both direct execution and make shell.
+if __name__ in {'__main__', '<run_path>'}:
+    email = os.environ.get('EMAIL')
+    if not email:
+        print(
+            'Usage: make shell SCRIPT=scripts/fast_shell/promote_superuser.py '
+            'EMAIL=<email>'
+        )
+        raise SystemExit(1)
     asyncio.run(promote(email))
