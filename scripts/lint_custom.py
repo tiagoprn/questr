@@ -24,7 +24,6 @@ QTR001 filename exemptions (allowed to import ORM models):
 from __future__ import annotations
 
 import ast
-import os
 import sys
 from pathlib import Path
 
@@ -91,7 +90,8 @@ def run_qtr001(root: Path) -> list[str]:
 # ── QTR002: No cross-domain imports between domain modules ───────────
 
 
-def _check_qtr002(filepath: Path) -> list[str]:
+# PLR0912: AST-node branches are inherent to a rule-walking linter
+def _check_qtr002(filepath: Path) -> list[str]:  # noqa: PLR0912
     """Check that domain modules don't import from other domains."""
     violations: list[str] = []
     rel = filepath.relative_to(PROJECT_ROOT)
@@ -102,9 +102,7 @@ def _check_qtr002(filepath: Path) -> list[str]:
     except ValueError:
         return violations
 
-    if not any(p == 'domains' for p in parts) or not parts[-1].endswith(
-        '.py'
-    ):
+    if not any(p == 'domains' for p in parts) or not parts[-1].endswith('.py'):
         return violations
 
     # Determine which domain this file belongs to
@@ -114,7 +112,7 @@ def _check_qtr002(filepath: Path) -> list[str]:
         if domains_idx + 1 >= len(parts):
             return violations
         owning_domain = parts[domains_idx + 1]
-    except (ValueError, IndexError):
+    except ValueError, IndexError:
         return violations
 
     try:
@@ -122,7 +120,8 @@ def _check_qtr002(filepath: Path) -> list[str]:
     except SyntaxError:
         return violations
 
-    for node in ast.walk(tree):
+    # PLR1702: AST-node nesting is inherent to the rule-walking linter
+    for node in ast.walk(tree):  # noqa: PLR1702
         if isinstance(node, ast.ImportFrom):
             if node.module and 'questr.domains' in node.module:
                 # Extract the domain being imported from

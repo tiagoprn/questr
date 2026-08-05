@@ -49,21 +49,21 @@ dev-server:  ## Run development server
 
 lint:  ## Run ruff linter to enforce coding practices
 	@printf '\n --- \n >>> Running linter...<<<\n'
-	@ruff check questr/ tests/
+	@ruff check questr/ tests/ scripts/
 	@printf '\n FINISHED! \n --- \n'
 
 lint-autofix:  ## Run ruff linter and autofix fixable errors
 	@printf '\n --- \n >>> Running linter with autofix...<<<\n'
-	@ruff check --fix questr/ tests/
+	@ruff check --fix questr/ tests/ scripts/
 	@printf '\n FINISHED! \n --- \n'
 
 style:  ## Run ruff to check code style
 	@echo 'running ruff format check...'
-	@ruff format --check questr/ tests/
+	@ruff format --check questr/ tests/ scripts/
 
 style-autofix:  ## Run ruff to format code
 	@echo 'running ruff format...'
-	@ruff format questr/ tests/
+	@ruff format questr/ tests/ scripts/
 
 architecture-lint:  ## Run custom architecture lint rules
 	@printf '\n --- \n >>> Running architecture lint...<<<\n'
