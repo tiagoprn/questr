@@ -33,6 +33,7 @@ from questr.domains.users.repository import (
 from questr.domains.users.service import hash_password, verify_password
 from questr.infrastructure.email import BaseEmailService, get_email_service
 from questr.infrastructure.login_rate_limiter import LoginRateLimiter
+from questr.settings import settings
 
 PASSWORD = 'StrongPass1!'
 WRONG_PASSWORD = 'WrongPass1!'
@@ -679,8 +680,10 @@ class TestCookieContract:
 
     @pytest.mark.asyncio
     async def test_login_sets_cookie_attributes(
-        self, client: AsyncClient, app: object
+        self, monkeypatch, client: AsyncClient, app: object
     ) -> None:
+        # FR-015 prod direction: Secure flag mandatory under ENVIRONMENT=prod.
+        monkeypatch.setattr(settings, 'ENVIRONMENT', 'prod')
         email = await _signup(client, app)
         resp = await _login(client, email)
         session_h = _set_cookie_headers(resp, 'session_id').lower()
@@ -691,6 +694,26 @@ class TestCookieContract:
         assert 'path=/api/v1/auth' in session_h
         assert 'httponly' not in csrf_h
         assert 'secure' in csrf_h
+        assert 'samesite=lax' in csrf_h
+        assert 'path=/' in csrf_h
+
+    @pytest.mark.asyncio
+    async def test_login_omits_secure_flag_in_dev(
+        self, monkeypatch, client: AsyncClient, app: object
+    ) -> None:
+        # FR-015 dev direction: no Secure flag; over HTTP it would break the
+        # auth flow (settings.SECURE_COOKIE lock rationale).
+        monkeypatch.setattr(settings, 'ENVIRONMENT', 'dev')
+        email = await _signup(client, app)
+        resp = await _login(client, email)
+        session_h = _set_cookie_headers(resp, 'session_id').lower()
+        csrf_h = _set_cookie_headers(resp, 'csrf_token').lower()
+        assert 'httponly' in session_h
+        assert 'secure' not in session_h
+        assert 'samesite=lax' in session_h
+        assert 'path=/api/v1/auth' in session_h
+        assert 'httponly' not in csrf_h
+        assert 'secure' not in csrf_h
         assert 'samesite=lax' in csrf_h
         assert 'path=/' in csrf_h
 
