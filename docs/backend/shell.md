@@ -56,6 +56,13 @@ static analysis tools (`ruff`, `ty`) to trace imports and resolve
 type information, avoiding false-positive errors for dynamically
 injected globals.
 
+> **Lint exemption:** `scripts/fast_shell/__init__.py` is exempt from the
+> QTR003 architecture lint rule (no ORM model imports in `scripts/`). The
+> exemption exists because the module is a shell namespace, not
+> operational logic: when running interactively we may need to access the
+> ORM models directly. This mirrors the `questr/shell.py` exemption in
+> QTR001.
+
 ### Writing a new sandbox script
 
 New scripts placed under `scripts/fast_shell/` should import from the

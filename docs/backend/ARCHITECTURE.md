@@ -776,7 +776,7 @@ db-downgrade:  ## Rollback last migration
 
 ## 15. Lint Rules
 
-Two custom lint rules are enforced via `scripts/lint_custom.py` (run with `uv run python scripts/lint_custom.py`).
+Three custom lint rules are enforced via `scripts/lint_custom.py` (run with `uv run python scripts/lint_custom.py`).
 
 ### QTR001: No ORM Imports Outside Repository Files
 
@@ -819,3 +819,27 @@ from questr.domains.hello import service as hello_service  # ⛔ VIOLATION
 from questr.domains.reports import service as reports_service   # ✅ ALLOWED
 from questr.domains.billing import service as billing_service   # ✅ ALLOWED
 ```
+
+### QTR003: No ORM Model Imports in scripts/
+
+Operational tooling under `scripts/` must go through the repository layer
+just like production code. Direct ORM model imports
+(`questr.infrastructure.orm.models`) are flagged in any `.py` file under
+`scripts/`, except the exact relative paths listed in `QTR003_EXEMPT` in
+`scripts/lint_custom.py`.
+
+**Violation:**
+```python
+# scripts/report.py
+from questr.infrastructure.orm.models import UserORMModel  # ⛔ VIOLATION
+```
+
+**Allowed — shell script namespace exemption (QTR003_EXEMPT):**
+```python
+# scripts/fast_shell/__init__.py
+from questr.infrastructure.orm.models import UserORMModel  # ✅ ALLOWED
+```
+
+The exemption mirrors the QTR001 `shell.py` exception: the fast_shell
+namespace re-exports ORM models for `make shell` script execution, and
+when running interactively we may need to access the ORM models directly.
