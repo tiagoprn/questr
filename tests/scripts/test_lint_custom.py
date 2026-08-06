@@ -1,7 +1,19 @@
 """Unit tests for the custom architecture linter.
 
-Tests build synthetic project trees under tmp_path and assert on the
+Tests build synthetic project trees under ``tmp_path`` and assert on the
 run_qtrNNN() entry points directly. No database, no containers.
+
+About ``tmp_path``: it is a built-in pytest fixture, defined in
+``_pytest/tmpdir.py`` and auto-registered with every session. It needs no
+import, no conftest.py entry, and no initialization in this module:
+pytest resolves fixtures by parameter name, so any test function that
+declares a ``tmp_path`` parameter receives a fresh pathlib.Path, unique to
+that test invocation, under the base temp dir (e.g.
+/tmp/pytest-of-<user>/pytest-<N>/<test-name>/). With the default retention
+policy ("failed"), the directory is removed after the test if it passed.
+Our helpers (_tree, _write) build the synthetic project root as
+``tmp_path / 'project'``, so every test gets an isolated tree and no
+synthetic file ever touches the real repository.
 """
 
 from pathlib import Path
