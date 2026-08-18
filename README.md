@@ -1,15 +1,15 @@
 # Questr
 
-A web application to manage your gaming backlog — track progress, log hours, write reviews, and get insights about your gaming habits.
+A web application to manage your comics, mangas and games backlog — track progress, log hours, write reviews, and get insights about your habits.
 
 This is a full revamp of my original Questrya project, rebuilt from the ground up as a long-term pet project designed to evolve over time.
 
 ## Features
 
-- **Multi-user support**: each user manages their own game library
-- **Game tracking**: log progress, hours played, personal notes, and reviews
-- **Backlog management**: add and organize games you plan to play
-- **Periodic reports**: Wrapped-style summaries of games added, started, and finished, filterable by current year, current month, or a custom date range
+- **Multi-user support**: each user manages their own library
+- **Tracking**: log progress, hours played, personal notes, and reviews
+- **Backlog management**: add and organize comics, mangas and games you plan to play
+- **Periodic reports**: Wrapped-style summaries of comics, mangas and games added, started, and finished, filterable by current year, current month, or a custom date range.
 
 ## Tech Stack
 
