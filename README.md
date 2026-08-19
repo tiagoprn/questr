@@ -35,6 +35,19 @@ This is a full revamp of my original Questrya project, rebuilt from the ground u
 
 ### Local development server
 
+> NOTE: if you want to quickly reset containers & restore db dump:
+
+```bash
+
+source .venv/bin/activate && \
+make docker-reset-all && \
+sleep 60 && \
+make db-live-restore FILE=./backups/postgres/db-dumps/  ## dump file name here
+
+```
+
+Otherwise, follow the instructions below.
+
 #### 01) Reset containers, setup database and raise dev server
 
 ```bash
