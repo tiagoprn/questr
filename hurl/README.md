@@ -183,3 +183,35 @@ The login response sets a `csrf_token` cookie alongside the `session_id` cookie.
 ```bash
 make dev-hurl-auth-flow
 ```
+
+## Makefile targets: remaining endpoints
+
+The following `dev-hurl-*` targets cover the endpoints that the auth-flow and
+signup flows do not. Each is self-contained (it performs its own setup: login,
+fresh-account signup, or Mailpit token retrieval), so targets can run in any
+order. The admin targets need the seeded SUPERUSER account
+(`hurl/vars/auth/signup/superuser.vars` -> promoted via
+`make shell SCRIPT=scripts/fast_shell/promote_superuser.py EMAIL=...`).
+
+| Target | Hurl file | Covers | Prerequisite |
+|---|---|---|---|
+| `dev-hurl-hello` | `hurl/hello/hello.hurl` | `GET /api/hello` (greeting is hour-dependent; asserts the greeting family) | dev-server |
+| `dev-hurl-resend-verification` | `hurl/auth/resend-verification.hurl` | `POST /api/v1/auth/resend-verification` (signup fresh account, no-enumeration message) | dev-server |
+| `dev-hurl-verify-email` | `hurl/auth/verify-email.hurl` | `GET /api/v1/auth/verify-email/{token}` (signup -> Mailpit token -> verify -> login) | dev-server + Mailpit |
+| `dev-hurl-logout-all` | `hurl/auth/logout-all.hurl` | `POST /api/v1/auth/logout-all` (login seed user -> revoke all -> `/me` 401) | dev-server + seeded `tiago+third` |
+| `dev-hurl-admin-impersonate` | `hurl/auth/admin-impersonate.hurl` | `POST /api/v1/auth/admin/impersonate` (superuser -> impersonate target -> `/me` confirms) | dev-server + SUPERUSER |
+| `dev-hurl-admin-impersonate-stop` | `hurl/auth/admin-impersonate-stop.hurl` | `POST /api/v1/auth/admin/impersonate/stop` (full round-trip, admin restored) | dev-server + SUPERUSER |
+| `dev-hurl-admin-roles` | `hurl/auth/admin-roles.hurl` | `POST /api/v1/auth/admin/roles` (promote throwaway, self-change 403, restore) | dev-server + SUPERUSER + Mailpit |
+
+### Notes
+
+- The Mailpit flows (`verify-email`, `admin-roles`) poll `GET /api/v1/messages`
+  and match the newest message by recipient, so they tolerate pre-existing
+  Mailpit mail.
+- `admin-impersonate-stop` sends an explicit `Cookie` header on the stop
+  request: after impersonation the cookie jar holds two `csrf_token` cookies
+  (root path from login, `path=/api/v1/auth` after rotation), which confuses
+  the middleware's double-submit check otherwise.
+- Running every target back-to-back performs about 9 logins; the per-IP login
+  throttle allows 20 attempts per 10 minutes, so stay within that budget when
+  iterating.

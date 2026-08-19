@@ -173,3 +173,24 @@ dev-hurl-create-users:  ## create default users through the API using hurl (requ
 
 dev-hurl-auth-flow:  ## login + /me + logout + /me flow using hurl (requires the dev-server up)
 	@hurl --very-verbose --variables-file hurl/vars/auth/flow/user_001.vars hurl/auth/auth-flow.hurl
+
+dev-hurl-hello:  ## GET /api/hello check using hurl (requires the dev-server up)
+	@hurl --very-verbose --variables-file hurl/vars/hello/hello.vars hurl/hello/hello.hurl
+
+dev-hurl-resend-verification:  ## resend-verification flow using hurl (requires the dev-server up)
+	@hurl --very-verbose --variables-file hurl/vars/auth/resend/resend.vars hurl/auth/resend-verification.hurl
+
+dev-hurl-verify-email:  ## signup + Mailpit token + verify-email + login flow using hurl (requires dev-server + Mailpit)
+	@hurl --very-verbose --variables-file hurl/vars/auth/verify/verify.vars hurl/auth/verify-email.hurl
+
+dev-hurl-logout-all:  ## login + logout-all + /me(401) flow using hurl (requires the dev-server up)
+	@hurl --very-verbose --variables-file hurl/vars/auth/logout-all/logout-all.vars hurl/auth/logout-all.hurl
+
+dev-hurl-admin-impersonate:  ## superuser impersonate flow using hurl (requires dev-server + seeded superuser)
+	@hurl --very-verbose --variables-file hurl/vars/auth/impersonate/impersonate.vars hurl/auth/admin-impersonate.hurl
+
+dev-hurl-admin-impersonate-stop:  ## impersonate + stop flow using hurl (requires dev-server + seeded superuser)
+	@hurl --very-verbose --variables-file hurl/vars/auth/impersonate/impersonate-stop.vars hurl/auth/admin-impersonate-stop.hurl
+
+dev-hurl-admin-roles:  ## role change flow using hurl (requires dev-server + seeded superuser + Mailpit)
+	@hurl --very-verbose --variables-file hurl/vars/auth/roles/roles.vars hurl/auth/admin-roles.hurl
