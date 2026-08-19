@@ -65,6 +65,12 @@ X-CSRF-Token: {{csrf_token}}
 
 HTTP 200
 
+# 6b. Logout the superuser (free the session before switching to the throwaway)
+POST {{host}}/api/v1/auth/logout
+X-CSRF-Token: {{csrf_token}}
+
+HTTP 200
+
 # 7. Login as the promoted throwaway (role change took effect)
 POST {{host}}/api/v1/auth/login
 accept: application/json
@@ -115,5 +121,12 @@ X-CSRF-Token: {{csrf_token}}
     "target_id": "{{account_id}}",
     "new_role": "user"
 }
+
+HTTP 200
+
+# 10. Logout the superuser (cleanup - avoids accumulating toward the
+#     10-concurrent-session cap on repeated runs)
+POST {{host}}/api/v1/auth/logout
+X-CSRF-Token: {{csrf_token}}
 
 HTTP 200

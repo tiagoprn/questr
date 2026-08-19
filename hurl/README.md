@@ -212,6 +212,12 @@ order. The admin targets need the seeded SUPERUSER account
   request: after impersonation the cookie jar holds two `csrf_token` cookies
   (root path from login, `path=/api/v1/auth` after rotation), which confuses
   the middleware's double-submit check otherwise.
+- The admin flows (`admin-impersonate`, `admin-impersonate-stop`,
+  `admin-roles`) log out every session they create before exiting, so repeated
+  runs do not accumulate toward the 10-concurrent-session cap. The
+  `admin-impersonate` flow stops the impersonation and logs out the admin;
+  `admin-impersonate-stop` logs out the restored admin; `admin-roles` logs out
+  the superuser after the promote and again after the restore.
 - Running every target back-to-back performs about 9 logins; the per-IP login
   throttle allows 20 attempts per 10 minutes, so stay within that budget when
   iterating.

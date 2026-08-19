@@ -12,6 +12,13 @@ Content-Type: application/json
 HTTP 200
 [Captures]
 target_id: jsonpath "$.user.id"
+csrf_token: cookie "csrf_token"
+
+# 1b. Logout the target user (free the session before switching to the superuser)
+POST {{host}}/api/v1/auth/logout
+X-CSRF-Token: {{csrf_token}}
+
+HTTP 200
 
 # 2. Login as the SUPERUSER - capture admin id + csrf token
 POST {{host}}/api/v1/auth/login
@@ -58,6 +65,9 @@ Cookie: session_id={{session_id}}; csrf_token={{csrf_token}}
 X-CSRF-Token: {{csrf_token}}
 
 HTTP 200
+[Captures]
+csrf_token: cookie "csrf_token"
+session_id: cookie "session_id"
 
 # 6. Confirm the admin identity is restored
 GET {{host}}/api/v1/auth/me
@@ -65,3 +75,11 @@ HTTP 200
 [Asserts]
 jsonpath "$.is_impersonation" == false
 jsonpath "$.user.id" == "{{admin_id}}"
+
+# 7. Logout the admin session (cleanup - avoids accumulating toward the
+#    10-concurrent-session cap on repeated runs)
+POST {{host}}/api/v1/auth/logout
+Cookie: session_id={{session_id}}; csrf_token={{csrf_token}}
+X-CSRF-Token: {{csrf_token}}
+
+HTTP 200
