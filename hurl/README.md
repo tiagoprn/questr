@@ -83,6 +83,9 @@ dev-hurl-create-users:  ## create default users through the API
 	@hurl --very-verbose \
 	    --variables-file hurl/vars/auth/signup/user_003.vars \
 	    hurl/auth/signup.hurl
+	@hurl --very-verbose \
+	    --variables-file hurl/vars/auth/signup/superuser.vars \
+	    hurl/auth/signup.hurl
 ```
 
 ### What it does
