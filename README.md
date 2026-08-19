@@ -48,7 +48,7 @@ make db-live-restore FILE=./backups/postgres/db-dumps/  ## dump file name here
 
 Otherwise, follow the instructions below.
 
-#### 01) Reset containers, setup database and raise dev server
+#### 01) Reset containers, setup database from migrations and raise dev server
 
 ```bash
 
