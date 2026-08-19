@@ -26,7 +26,7 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(
         title='questr',
-        description='Game tracking application backend',
+        description='Comics, mangas and game tracking application backend',
         version='0.1.0',
         lifespan=lifespan,
         docs_url='/docs' if settings.SERVE_DOCS else None,
