@@ -124,16 +124,22 @@ static analysis tools.
 For the full ADR, see:
 `/storage/src/pi-session/codesimple/adr.20260526-095507.md`
 
-### API
+### API docs
 
-The interactive API documentation (Swagger/Redoc) is served **only in development**
-(`ENVIRONMENT=dev`).
+The interactive API documentation (Swagger UI, ReDoc) and the OpenAPI schema
+(`/openapi.json`) are served **only in development** (`ENVIRONMENT=dev`).
+This is controlled by the `SERVE_DOCS` setting in `questr/settings.py`:
+
+```python
+SERVE_DOCS = (ENVIRONMENT == 'dev')
+```
+
+When `SERVE_DOCS` is false (e.g. `ENVIRONMENT=prod`), the three endpoints are
+disabled at app construction (`docs_url=None`, `redoc_url=None`,
+`openapi_url=None`) and return 404.
 
 - Swagger UI: [http://kvm-labs:8000/docs](http://kvm-labs:8000/docs)
-- Redoc: [http://kvm-labs:8000/redoc](http://kvm-labs:8000/redoc)
-
-In production (`ENVIRONMENT=prod`), these endpoints are disabled entirely and
-return 404.
+- ReDoc: [http://kvm-labs:8000/redoc](http://kvm-labs:8000/redoc)
 
 ## Security
 
