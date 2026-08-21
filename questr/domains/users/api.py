@@ -12,7 +12,9 @@ from questr.common.exceptions import AuthenticationError
 from questr.common.permissions import Permission, require_permission
 from questr.domains.users.repository import (
     AuditLogRepository,
+    EmailChangeRepository,
     EmailVerificationRepository,
+    PasswordResetTokenRepository,
     SessionRepository,
     UserRepository,
 )
@@ -20,6 +22,10 @@ from questr.domains.users.service import (
     AccountService,
     RoleService,
     SessionService,
+)
+from questr.infrastructure.dual_rate_limiter import (
+    DualRateLimiter,
+    get_dual_rate_limiter,
 )
 from questr.infrastructure.email import (
     BaseEmailService,
@@ -85,6 +91,57 @@ class ResendVerificationResponse(BaseModel):
 
 class PasswordValidationError(BaseModel):
     errors: list[str]
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class ChangePasswordResponse(BaseModel):
+    message: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    message: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class ResetPasswordResponse(BaseModel):
+    message: str
+
+
+class ChangeEmailRequest(BaseModel):
+    new_email: EmailStr
+    current_password: str
+
+
+class ChangeEmailResponse(BaseModel):
+    message: str
+
+
+class ConfirmEmailChangeRequest(BaseModel):
+    token: str
+
+
+class ConfirmEmailChangeResponse(BaseModel):
+    message: str
+
+
+class RevertEmailChangeRequest(BaseModel):
+    token: str
+
+
+class RevertEmailChangeResponse(BaseModel):
+    message: str
 
 
 class LoginRequest(BaseModel):
@@ -160,7 +217,19 @@ async def get_verification_repository(
     return EmailVerificationRepository(session)
 
 
-async def get_account_service(
+async def get_password_reset_token_repository(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+) -> PasswordResetTokenRepository:
+    return PasswordResetTokenRepository(session)
+
+
+async def get_email_change_repository(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+) -> EmailChangeRepository:
+    return EmailChangeRepository(session)
+
+
+async def get_account_service(  # noqa: PLR0913,PLR0917
     user_repo: Annotated[UserRepository, Depends(get_user_repository)],
     verification_repo: Annotated[
         EmailVerificationRepository,
@@ -168,12 +237,33 @@ async def get_account_service(
     ],
     email_service: Annotated[BaseEmailService, Depends(get_email_service)],
     rate_limiter: Annotated[RedisRateLimiter, Depends(get_rate_limiter)],
+    login_rate_limiter: Annotated[
+        LoginRateLimiter, Depends(get_login_rate_limiter)
+    ],
+    password_reset_token_repo: Annotated[
+        PasswordResetTokenRepository,
+        Depends(get_password_reset_token_repository),
+    ],
+    audit_repo: Annotated[
+        AuditLogRepository, Depends(get_audit_log_repository)
+    ],
+    dual_rate_limiter: Annotated[
+        DualRateLimiter, Depends(get_dual_rate_limiter)
+    ],
+    email_change_repo: Annotated[
+        EmailChangeRepository, Depends(get_email_change_repository)
+    ],
 ) -> AccountService:
     return AccountService(
         user_repo=user_repo,
         verification_repo=verification_repo,
         email_service=email_service,
         rate_limiter=rate_limiter,
+        login_rate_limiter=login_rate_limiter,
+        password_reset_token_repo=password_reset_token_repo,
+        audit_repo=audit_repo,
+        dual_rate_limiter=dual_rate_limiter,
+        email_change_repo=email_change_repo,
     )
 
 
@@ -502,6 +592,246 @@ async def me(
             else None
         ),
     )
+
+
+@router.post(
+    '/me/password',
+    response_model=ChangePasswordResponse,
+    responses={
+        400: {'description': 'Invalid current password or weak new password'},
+        401: {'description': 'Not authenticated'},
+    },
+)
+async def change_password_route(  # noqa: PLR0913,PLR0917
+    payload: ChangePasswordRequest,
+    current: T_CurrentUser,
+    service: T_AccountService,
+    session_service: T_SessionService,
+    request: Request,
+    client_ip: T_ClientIP,
+) -> ChangePasswordResponse:
+    """Change the authenticated user's password.
+
+    Gate 5 is composed here: other sessions are revoked, the current
+    session is kept and its CSRF token rotated.
+    """
+    user = current['user']
+    user_agent = request.headers.get('user-agent', '')
+
+    await service.change_password(
+        user_id=user.id,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+        client_ip=client_ip,
+        user_agent=user_agent,
+    )
+
+    current_session_id = UUID(request.cookies['session_id'])
+    await session_service.logout_all(
+        user.id, except_session_id=current_session_id
+    )
+    csrf_raw = await session_service.rotate_csrf(current_session_id)
+
+    response = Response(
+        content=ChangePasswordResponse(
+            message='Password changed'
+        ).model_dump_json(),
+        media_type='application/json',
+        status_code=200,
+    )
+    response.set_cookie(
+        key='csrf_token',
+        value=csrf_raw,
+        path='/',
+        secure=settings.SECURE_COOKIE,
+        httponly=False,
+        samesite='lax',
+    )
+    return response
+
+
+@router.post(
+    '/forgot-password',
+    response_model=ForgotPasswordResponse,
+    responses={
+        429: {'description': 'Rate limit exceeded'},
+    },
+)
+async def forgot_password_route(
+    payload: ForgotPasswordRequest,
+    service: T_AccountService,
+    request: Request,
+    client_ip: T_ClientIP,
+) -> ForgotPasswordResponse:
+    """Request a password reset. Uniform response (no enumeration)."""
+    user_agent = request.headers.get('user-agent', '')
+    await service.request_password_reset(
+        email=payload.email,
+        client_ip=client_ip,
+        user_agent=user_agent,
+    )
+    return ForgotPasswordResponse(
+        message='If an account with this email exists, '
+        'a password reset link has been sent.'
+    )
+
+
+@router.post(
+    '/reset-password',
+    response_model=ResetPasswordResponse,
+    responses={
+        400: {'description': 'Invalid/expired token or weak password'},
+    },
+)
+async def reset_password_route(
+    payload: ResetPasswordRequest,
+    service: T_AccountService,
+    session_service: T_SessionService,
+    request: Request,
+    client_ip: T_ClientIP,
+) -> ResetPasswordResponse:
+    """Reset a password with a single-use token.
+
+    Gate 5: all of the user's sessions are revoked (pre-auth route).
+    """
+    user_agent = request.headers.get('user-agent', '')
+    user = await service.reset_password(
+        token=payload.token,
+        new_password=payload.new_password,
+        client_ip=client_ip,
+        user_agent=user_agent,
+    )
+    await session_service.logout_all(user.id)
+    return ResetPasswordResponse(message='Password reset successfully')
+
+
+@router.post(
+    '/me/email',
+    response_model=ChangeEmailResponse,
+    responses={
+        400: {'description': 'Invalid current password or duplicate email'},
+        401: {'description': 'Not authenticated'},
+    },
+)
+async def change_email_route(
+    payload: ChangeEmailRequest,
+    current: T_CurrentUser,
+    service: T_AccountService,
+    request: Request,
+    client_ip: T_ClientIP,
+) -> ChangeEmailResponse:
+    """Request an email change (auth required, CSRF auto-protected)."""
+    user = current['user']
+    user_agent = request.headers.get('user-agent', '')
+    await service.request_email_change(
+        user_id=user.id,
+        new_email=payload.new_email,
+        current_password=payload.current_password,
+        client_ip=client_ip,
+        user_agent=user_agent,
+    )
+    return ChangeEmailResponse(
+        message='A confirmation link has been sent to the new email.'
+    )
+
+
+@router.get(
+    '/me/email/confirm/{token}',
+    include_in_schema=False,
+)
+async def confirm_email_change_form(
+    token: str,
+) -> Response:
+    """Serve a minimal HTML form with the token pre-filled (decision 6)."""
+    return _token_form(
+        action='/api/v1/auth/me/email/confirm',
+        token=token,
+        button='Confirm email change',
+    )
+
+
+@router.post(
+    '/me/email/confirm',
+    response_model=ConfirmEmailChangeResponse,
+    responses={
+        400: {'description': 'Invalid/expired token'},
+    },
+)
+async def confirm_email_change_route(
+    payload: ConfirmEmailChangeRequest,
+    service: T_AccountService,
+    session_service: T_SessionService,
+    request: Request,
+    client_ip: T_ClientIP,
+) -> ConfirmEmailChangeResponse:
+    """Confirm an email change (pre-auth, EXEMPT).
+
+    Gate 5: all of the user's sessions are revoked.
+    """
+    user_agent = request.headers.get('user-agent', '')
+    user = await service.confirm_email_change(
+        token=payload.token,
+        client_ip=client_ip,
+        user_agent=user_agent,
+    )
+    await session_service.logout_all(user.id)
+    return ConfirmEmailChangeResponse(message='Email changed successfully')
+
+
+@router.get(
+    '/me/email/revert/{token}',
+    include_in_schema=False,
+)
+async def revert_email_change_form(
+    token: str,
+) -> Response:
+    """Serve a minimal HTML form with the token pre-filled (decision 6)."""
+    return _token_form(
+        action='/api/v1/auth/me/email/revert',
+        token=token,
+        button='Revert email change',
+    )
+
+
+@router.post(
+    '/me/email/revert',
+    response_model=RevertEmailChangeResponse,
+    responses={
+        400: {'description': 'Invalid/expired token'},
+    },
+)
+async def revert_email_change_route(
+    payload: RevertEmailChangeRequest,
+    service: T_AccountService,
+    session_service: T_SessionService,
+    request: Request,
+    client_ip: T_ClientIP,
+) -> RevertEmailChangeResponse:
+    """Revert an email change (pre-auth, EXEMPT).
+
+    Gate 5: all of the user's sessions are revoked.
+    """
+    user_agent = request.headers.get('user-agent', '')
+    user = await service.revert_email_change(
+        revert_token=payload.token,
+        client_ip=client_ip,
+        user_agent=user_agent,
+    )
+    await session_service.logout_all(user.id)
+    return RevertEmailChangeResponse(message='Email change reverted')
+
+
+def _token_form(action: str, token: str, button: str) -> Response:
+    """Return a minimal HTML form that POSTs the token."""
+    html = (
+        '<html><body>'
+        f'<form method="post" action="{action}">'
+        f'<input type="hidden" name="token" value="{token}" />'
+        f'<button type="submit">{button}</button>'
+        '</form>'
+        '</body></html>'
+    )
+    return Response(content=html, media_type='text/html')
 
 
 @router.post(

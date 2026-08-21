@@ -33,9 +33,15 @@ class CsrfMiddleware:
     SAFE_METHODS = frozenset({'GET', 'HEAD', 'OPTIONS'})
 
     EXEMPT_PATHS = frozenset({
+        # Pre-auth POSTs: no session exists yet, so CSRF cannot apply.
         '/api/v1/auth/login',
         '/api/v1/auth/signup',
         '/api/v1/auth/resend-verification',
+        '/api/v1/auth/forgot-password',
+        '/api/v1/auth/reset-password',
+        # Pre-auth POSTs: token-link confirmation/revert, no session yet.
+        '/api/v1/auth/me/email/confirm',
+        '/api/v1/auth/me/email/revert',
     })
 
     def __init__(self, app: ASGIApp) -> None:

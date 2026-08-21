@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 import pytest
 
@@ -13,6 +13,8 @@ from questr.common.exceptions import (
     AccountSuspendedError,
     AuthenticationError,
     EmailNotVerifiedError,
+    InvalidCurrentPasswordError,
+    InvalidResetTokenError,
     InvalidVerificationTokenError,
     RateLimitExceededError,
     TooManyActiveSessionsError,
@@ -20,6 +22,8 @@ from questr.common.exceptions import (
 )
 from questr.domains.users.repository import (
     AuditLog,
+    EmailChangeRequest,
+    PasswordResetToken,
 )
 from questr.domains.users.repository import (
     Session as SessionDomain,
@@ -30,6 +34,7 @@ from questr.domains.users.service import (
     RoleService,
     SessionService,
     User,
+    hash_password,
 )
 from questr.settings import settings
 
@@ -42,6 +47,11 @@ def mock_user_repo() -> MagicMock:
     repo.get_by_email = AsyncMock(return_value=None)
     repo.get_by_id = AsyncMock()
     repo.update_status = AsyncMock()
+    repo.update_password = AsyncMock()
+    repo.update_email = AsyncMock()
+    repo.set_email_hold = AsyncMock()
+    repo.revert_email = AsyncMock()
+    repo.get_by_email_or_previous = AsyncMock(return_value=None)
     return repo
 
 
@@ -59,6 +69,13 @@ def mock_verification_repo() -> MagicMock:
 def mock_email_service() -> MagicMock:
     service = MagicMock()
     service.send_verification_email = AsyncMock(return_value=True)
+    service.send_password_changed_email = AsyncMock(return_value=True)
+    service.send_password_reset_email = AsyncMock(return_value=True)
+    service.send_password_reset_done_email = AsyncMock(return_value=True)
+    service.send_email_change_confirm_email = AsyncMock(return_value=True)
+    service.send_email_change_old_notification = AsyncMock(return_value=True)
+    service.send_email_changed_notice = AsyncMock(return_value=True)
+    service.send_email_change_reverted_notice = AsyncMock(return_value=True)
     return service
 
 
@@ -90,6 +107,36 @@ def mock_audit_log_repo() -> MagicMock:
 
 
 @pytest.fixture
+def mock_password_reset_token_repo() -> MagicMock:
+    repo = MagicMock()
+    repo.create = AsyncMock()
+    repo.get_by_token_hash = AsyncMock()
+    repo.mark_as_used = AsyncMock()
+    repo.delete_by_user_id = AsyncMock(return_value=0)
+    return repo
+
+
+@pytest.fixture
+def mock_dual_rate_limiter() -> MagicMock:
+    limiter = MagicMock()
+    limiter.check_allowed = AsyncMock()
+    limiter.consume_on_send = AsyncMock()
+    return limiter
+
+
+@pytest.fixture
+def mock_email_change_repo() -> MagicMock:
+    repo = MagicMock()
+    repo.create = AsyncMock()
+    repo.get_by_token_hash = AsyncMock()
+    repo.get_by_revert_token_hash = AsyncMock()
+    repo.mark_as_used = AsyncMock()
+    repo.mark_revert_as_used = AsyncMock()
+    repo.delete_by_user_id = AsyncMock(return_value=0)
+    return repo
+
+
+@pytest.fixture
 def mock_login_rate_limiter() -> MagicMock:
     limiter = MagicMock()
     limiter.check_login_allowed = AsyncMock()
@@ -105,12 +152,22 @@ def account_service(
     mock_verification_repo: MagicMock,
     mock_email_service: MagicMock,
     mock_rate_limiter: MagicMock,
+    mock_login_rate_limiter: MagicMock,
+    mock_password_reset_token_repo: MagicMock,
+    mock_audit_log_repo: MagicMock,
+    mock_dual_rate_limiter: MagicMock,
+    mock_email_change_repo: MagicMock,
 ) -> AccountService:
     return AccountService(
         user_repo=mock_user_repo,
         verification_repo=mock_verification_repo,
         email_service=mock_email_service,
         rate_limiter=mock_rate_limiter,
+        login_rate_limiter=mock_login_rate_limiter,
+        password_reset_token_repo=mock_password_reset_token_repo,
+        audit_repo=mock_audit_log_repo,
+        dual_rate_limiter=mock_dual_rate_limiter,
+        email_change_repo=mock_email_change_repo,
     )
 
 
@@ -451,6 +508,717 @@ class TestResendVerification:
         )
 
         assert result is True
+
+
+class TestChangePassword:
+    """Tests for AccountService.change_password()."""
+
+    @pytest.mark.asyncio
+    async def test_wrong_current_password_raises_and_records_failure(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_login_rate_limiter: MagicMock,
+    ) -> None:
+        """Gate 1: mismatch raises and records a failure."""
+        user_id = uuid7()
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            password_hash=hash_password('OldPass1!'),
+            status=UserStatus.ACTIVE,
+        )
+
+        with pytest.raises(InvalidCurrentPasswordError):
+            await account_service.change_password(
+                user_id=user_id,
+                current_password='wrong',
+                new_password='NewPass1!',
+                client_ip='127.0.0.1',
+                user_agent='test',
+            )
+
+        mock_login_rate_limiter.record_failure.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_locked_account_rejected_before_verify(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_login_rate_limiter: MagicMock,
+    ) -> None:
+        """Gate 1: check_login_allowed lockout short-circuits."""
+        user_id = uuid7()
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            password_hash=hash_password('OldPass1!'),
+            status=UserStatus.ACTIVE,
+        )
+        mock_login_rate_limiter.check_login_allowed.side_effect = (
+            RateLimitExceededError('locked')
+        )
+
+        with pytest.raises(RateLimitExceededError):
+            await account_service.change_password(
+                user_id=user_id,
+                current_password='OldPass1!',
+                new_password='NewPass1!',
+                client_ip='127.0.0.1',
+                user_agent='test',
+            )
+
+        mock_login_rate_limiter.record_failure.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_weak_new_password_raises_value_error(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_login_rate_limiter: MagicMock,
+    ) -> None:
+        """T-003: weak new password raises ValueError (400 at boundary)."""
+        user_id = uuid7()
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            password_hash=hash_password('OldPass1!'),
+            status=UserStatus.ACTIVE,
+        )
+
+        with pytest.raises(ValueError):  # noqa: PT011
+            await account_service.change_password(
+                user_id=user_id,
+                current_password='OldPass1!',
+                new_password='weak',
+                client_ip='127.0.0.1',
+                user_agent='test',
+            )
+
+    @pytest.mark.asyncio
+    async def test_success_updates_password_invalidates_tokens_and_audits(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_login_rate_limiter: MagicMock,
+        mock_password_reset_token_repo: MagicMock,
+        mock_audit_log_repo: MagicMock,
+        mock_email_service: MagicMock,
+    ) -> None:
+        """Gates 1+2: success updates hash, deletes reset tokens, audits."""
+        user_id = uuid7()
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            password_hash=hash_password('OldPass1!'),
+            status=UserStatus.ACTIVE,
+        )
+        mock_user_repo.update_password.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            password_hash=hash_password('NewPass1!'),
+            status=UserStatus.ACTIVE,
+        )
+
+        result = await account_service.change_password(
+            user_id=user_id,
+            current_password='OldPass1!',
+            new_password='NewPass1!',
+            client_ip='127.0.0.1',
+            user_agent='test-agent',
+        )
+
+        assert result is not None
+        mock_login_rate_limiter.record_success.assert_awaited_once()
+        mock_user_repo.update_password.assert_awaited_once()
+        mock_password_reset_token_repo.delete_by_user_id.assert_awaited_once_with(
+            user_id
+        )
+        mock_audit_log_repo.insert.assert_awaited_once()
+        audit = mock_audit_log_repo.insert.await_args.args[0]
+        assert audit.action == AuditAction.PASSWORD_CHANGED
+        assert audit.ip_address == '127.0.0.1'
+        assert audit.user_agent == 'test-agent'
+        mock_email_service.send_password_changed_email.assert_awaited_once_with(
+            'test@example.com'
+        )
+
+
+class TestRequestPasswordReset:
+    """Tests for AccountService.request_password_reset()."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_email_returns_true_uniformly(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_dual_rate_limiter: MagicMock,
+    ) -> None:
+        """Gate 7: unknown email returns True (no enumeration)."""
+        mock_user_repo.get_by_email_or_previous.return_value = None
+        result = await account_service.request_password_reset(
+            'nobody@example.com', '127.0.0.1', 'test'
+        )
+        assert result is True
+        mock_dual_rate_limiter.consume_on_send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_active_sends_reset_and_consumes(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_password_reset_token_repo: MagicMock,
+        mock_email_service: MagicMock,
+        mock_dual_rate_limiter: MagicMock,
+    ) -> None:
+        """Matrix D3: ACTIVE sends a reset and counts the send."""
+        user_id = uuid7()
+        mock_user_repo.get_by_email_or_previous.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            status=UserStatus.ACTIVE,
+        )
+        result = await account_service.request_password_reset(
+            'test@example.com', '127.0.0.1', 'test'
+        )
+        assert result is True
+        mock_password_reset_token_repo.delete_by_user_id.assert_awaited_once_with(
+            user_id
+        )
+        mock_password_reset_token_repo.create.assert_awaited_once()
+        mock_email_service.send_password_reset_email.assert_awaited_once()
+        mock_dual_rate_limiter.consume_on_send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_pending_resends_verification(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_verification_repo: MagicMock,
+        mock_email_service: MagicMock,
+        mock_dual_rate_limiter: MagicMock,
+    ) -> None:
+        """Matrix D3: PENDING resends verification, no reset token."""
+        user_id = uuid7()
+        mock_user_repo.get_by_email_or_previous.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            status=UserStatus.PENDING,
+        )
+        result = await account_service.request_password_reset(
+            'test@example.com', '127.0.0.1', 'test'
+        )
+        assert result is True
+        mock_verification_repo.create.assert_awaited_once()
+        mock_email_service.send_verification_email.assert_awaited_once()
+        mock_dual_rate_limiter.consume_on_send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_suspended_sends_nothing(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_email_service: MagicMock,
+        mock_dual_rate_limiter: MagicMock,
+    ) -> None:
+        """Matrix D3: SUSPENDED sends nothing, uniform True."""
+        mock_user_repo.get_by_email_or_previous.return_value = User(
+            id=uuid7(),
+            username='testuser',
+            email='test@example.com',
+            status=UserStatus.SUSPENDED,
+        )
+        result = await account_service.request_password_reset(
+            'test@example.com', '127.0.0.1', 'test'
+        )
+        assert result is True
+        mock_email_service.send_password_reset_email.assert_not_awaited()
+        mock_dual_rate_limiter.consume_on_send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_raises(
+        self,
+        account_service: AccountService,
+        mock_dual_rate_limiter: MagicMock,
+    ) -> None:
+        """Gate 6: check_allowed lockout raises."""
+        mock_dual_rate_limiter.check_allowed.side_effect = (
+            RateLimitExceededError('limited')
+        )
+        with pytest.raises(RateLimitExceededError):
+            await account_service.request_password_reset(
+                'test@example.com', '127.0.0.1', 'test'
+            )
+
+
+class TestResetPassword:
+    """Tests for AccountService.reset_password()."""
+
+    def _valid_token(self, user_id: UUID) -> PasswordResetToken:
+        return PasswordResetToken(
+            id=uuid7(),
+            user_id=user_id,
+            token_hash='hash',
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+
+    @pytest.mark.asyncio
+    async def test_valid_token_resets_and_audits(
+        self,
+        account_service: AccountService,
+        mock_password_reset_token_repo: MagicMock,
+        mock_user_repo: MagicMock,
+        mock_audit_log_repo: MagicMock,
+        mock_email_service: MagicMock,
+    ) -> None:
+        """Gate 2: valid token resets, invalidates tokens, audits."""
+        user_id = uuid7()
+        mock_password_reset_token_repo.get_by_token_hash.return_value = (
+            self._valid_token(user_id)
+        )
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            password_hash=hash_password('OldPass1!'),
+            status=UserStatus.ACTIVE,
+        )
+
+        result = await account_service.reset_password(
+            'rawtoken', 'NewPass1!', '127.0.0.1', 'test-agent'
+        )
+
+        assert result is not None
+        mock_user_repo.update_password.assert_awaited_once()
+        mock_password_reset_token_repo.delete_by_user_id.assert_awaited_once_with(
+            user_id
+        )
+        mock_password_reset_token_repo.mark_as_used.assert_awaited_once()
+        mock_audit_log_repo.insert.assert_awaited_once()
+        audit = mock_audit_log_repo.insert.await_args.args[0]
+        assert audit.action == AuditAction.PASSWORD_RESET
+        assert audit.user_agent == 'test-agent'
+        mock_email_service.send_password_reset_done_email.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_expired_token_raises(
+        self,
+        account_service: AccountService,
+        mock_password_reset_token_repo: MagicMock,
+    ) -> None:
+        """Expired token raises InvalidResetTokenError."""
+        token = self._valid_token(uuid7())
+        token.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        mock_password_reset_token_repo.get_by_token_hash.return_value = token
+
+        with pytest.raises(InvalidResetTokenError):
+            await account_service.reset_password(
+                'rawtoken', 'NewPass1!', '127.0.0.1', 'test'
+            )
+
+    @pytest.mark.asyncio
+    async def test_used_token_raises(
+        self,
+        account_service: AccountService,
+        mock_password_reset_token_repo: MagicMock,
+    ) -> None:
+        """Used token raises InvalidResetTokenError (single-use)."""
+        token = self._valid_token(uuid7())
+        token.used_at = datetime.now(timezone.utc)
+        mock_password_reset_token_repo.get_by_token_hash.return_value = token
+
+        with pytest.raises(InvalidResetTokenError):
+            await account_service.reset_password(
+                'rawtoken', 'NewPass1!', '127.0.0.1', 'test'
+            )
+
+    @pytest.mark.asyncio
+    async def test_suspended_account_raises(
+        self,
+        account_service: AccountService,
+        mock_password_reset_token_repo: MagicMock,
+        mock_user_repo: MagicMock,
+    ) -> None:
+        """SUSPENDED account rejects the token uniformly."""
+        user_id = uuid7()
+        mock_password_reset_token_repo.get_by_token_hash.return_value = (
+            self._valid_token(user_id)
+        )
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            status=UserStatus.SUSPENDED,
+        )
+
+        with pytest.raises(InvalidResetTokenError):
+            await account_service.reset_password(
+                'rawtoken', 'NewPass1!', '127.0.0.1', 'test'
+            )
+
+    @pytest.mark.asyncio
+    async def test_weak_password_raises_value_error(
+        self,
+        account_service: AccountService,
+        mock_password_reset_token_repo: MagicMock,
+        mock_user_repo: MagicMock,
+    ) -> None:
+        """T-003: weak new password raises ValueError (400 at boundary)."""
+        user_id = uuid7()
+        mock_password_reset_token_repo.get_by_token_hash.return_value = (
+            self._valid_token(user_id)
+        )
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            status=UserStatus.ACTIVE,
+        )
+
+        with pytest.raises(ValueError):  # noqa: PT011
+            await account_service.reset_password(
+                'rawtoken', 'weak', '127.0.0.1', 'test'
+            )
+
+
+class TestRequestEmailChange:
+    """Tests for AccountService.request_email_change()."""
+
+    @pytest.mark.asyncio
+    async def test_wrong_current_password_raises(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_login_rate_limiter: MagicMock,
+    ) -> None:
+        """Gate 1: mismatch raises and records a failure."""
+        user_id = uuid7()
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='old@example.com',
+            password_hash=hash_password('OldPass1!'),
+            status=UserStatus.ACTIVE,
+        )
+
+        with pytest.raises(InvalidCurrentPasswordError):
+            await account_service.request_email_change(
+                user_id=user_id,
+                new_email='new@example.com',
+                current_password='wrong',
+                client_ip='127.0.0.1',
+                user_agent='test',
+            )
+        mock_login_rate_limiter.record_failure.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_email_raises(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_login_rate_limiter: MagicMock,
+    ) -> None:
+        """Gate 3: duplicate (incl. held previous_email) raises."""
+        user_id = uuid7()
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='old@example.com',
+            password_hash=hash_password('OldPass1!'),
+            status=UserStatus.ACTIVE,
+        )
+        mock_user_repo.get_by_email_or_previous.return_value = User(
+            id=uuid7(), username='other', email='new@example.com'
+        )
+
+        with pytest.raises(UserAlreadyExistsError):
+            await account_service.request_email_change(
+                user_id=user_id,
+                new_email='new@example.com',
+                current_password='OldPass1!',
+                client_ip='127.0.0.1',
+                user_agent='test',
+            )
+
+    @pytest.mark.asyncio
+    async def test_success_creates_request_audits_and_sends(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_login_rate_limiter: MagicMock,
+        mock_email_change_repo: MagicMock,
+        mock_audit_log_repo: MagicMock,
+        mock_email_service: MagicMock,
+        mock_dual_rate_limiter: MagicMock,
+    ) -> None:
+        """Gates 1+3+4+6: success creates, audits, sends, consumes."""
+        user_id = uuid7()
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='old@example.com',
+            password_hash=hash_password('OldPass1!'),
+            status=UserStatus.ACTIVE,
+        )
+        mock_user_repo.get_by_email_or_previous.return_value = None
+
+        result = await account_service.request_email_change(
+            user_id=user_id,
+            new_email='new@example.com',
+            current_password='OldPass1!',
+            client_ip='127.0.0.1',
+            user_agent='test-agent',
+        )
+
+        assert result is True
+        mock_email_change_repo.delete_by_user_id.assert_awaited_once_with(
+            user_id
+        )
+        mock_email_change_repo.create.assert_awaited_once()
+        created = mock_email_change_repo.create.await_args.args[0]
+        assert created.old_email == 'old@example.com'
+        assert created.new_email == 'new@example.com'
+        assert created.ip == '127.0.0.1'
+        assert created.user_agent == 'test-agent'
+        mock_audit_log_repo.insert.assert_awaited_once()
+        audit = mock_audit_log_repo.insert.await_args.args[0]
+        assert audit.action == AuditAction.EMAIL_CHANGE_REQUESTED
+        mock_email_service.send_email_change_confirm_email.assert_awaited_once()
+        mock_email_service.send_email_change_old_notification.assert_awaited_once()
+        mock_dual_rate_limiter.consume_on_send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_raises(
+        self,
+        account_service: AccountService,
+        mock_user_repo: MagicMock,
+        mock_login_rate_limiter: MagicMock,
+        mock_dual_rate_limiter: MagicMock,
+    ) -> None:
+        """Gate 6: check_allowed lockout raises."""
+        user_id = uuid7()
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='old@example.com',
+            password_hash=hash_password('OldPass1!'),
+            status=UserStatus.ACTIVE,
+        )
+        mock_dual_rate_limiter.check_allowed.side_effect = (
+            RateLimitExceededError('limited')
+        )
+
+        with pytest.raises(RateLimitExceededError):
+            await account_service.request_email_change(
+                user_id=user_id,
+                new_email='new@example.com',
+                current_password='OldPass1!',
+                client_ip='127.0.0.1',
+                user_agent='test',
+            )
+
+
+class TestConfirmEmailChange:
+    """Tests for AccountService.confirm_email_change()."""
+
+    def _request(self, user_id: UUID) -> EmailChangeRequest:
+        return EmailChangeRequest(
+            id=uuid7(),
+            user_id=user_id,
+            old_email='old@example.com',
+            new_email='new@example.com',
+            token_hash='hash',
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            revert_token_hash='revert_hash',
+        )
+
+    @pytest.mark.asyncio
+    async def test_valid_token_confirms_and_sets_hold(
+        self,
+        account_service: AccountService,
+        mock_email_change_repo: MagicMock,
+        mock_user_repo: MagicMock,
+        mock_password_reset_token_repo: MagicMock,
+        mock_audit_log_repo: MagicMock,
+        mock_email_service: MagicMock,
+    ) -> None:
+        """Gates 2+3: confirm sets hold, invalidates reset tokens, audits."""
+        user_id = uuid7()
+        mock_email_change_repo.get_by_token_hash.return_value = self._request(
+            user_id
+        )
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='old@example.com',
+            status=UserStatus.ACTIVE,
+        )
+        mock_user_repo.get_by_email_or_previous.return_value = None
+
+        result = await account_service.confirm_email_change(
+            'rawtoken', '127.0.0.1', 'test-agent'
+        )
+
+        assert result is not None
+        mock_user_repo.update_email.assert_awaited_once_with(
+            user_id, 'new@example.com'
+        )
+        mock_user_repo.set_email_hold.assert_awaited_once_with(
+            user_id, 'old@example.com'
+        )
+        mock_password_reset_token_repo.delete_by_user_id.assert_awaited_once_with(
+            user_id
+        )
+        mock_email_change_repo.mark_as_used.assert_awaited_once()
+        mock_audit_log_repo.insert.assert_awaited_once()
+        audit = mock_audit_log_repo.insert.await_args.args[0]
+        assert audit.action == AuditAction.EMAIL_CHANGED
+        mock_email_service.send_email_changed_notice.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_expired_token_raises(
+        self,
+        account_service: AccountService,
+        mock_email_change_repo: MagicMock,
+    ) -> None:
+        request = self._request(uuid7())
+        request.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        mock_email_change_repo.get_by_token_hash.return_value = request
+
+        with pytest.raises(InvalidResetTokenError):
+            await account_service.confirm_email_change(
+                'rawtoken', '127.0.0.1', 'test'
+            )
+
+    @pytest.mark.asyncio
+    async def test_duplicate_new_email_raises(
+        self,
+        account_service: AccountService,
+        mock_email_change_repo: MagicMock,
+        mock_user_repo: MagicMock,
+    ) -> None:
+        user_id = uuid7()
+        mock_email_change_repo.get_by_token_hash.return_value = self._request(
+            user_id
+        )
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='old@example.com',
+            status=UserStatus.ACTIVE,
+        )
+        mock_user_repo.get_by_email_or_previous.return_value = User(
+            id=uuid7(), username='other', email='new@example.com'
+        )
+
+        with pytest.raises(UserAlreadyExistsError):
+            await account_service.confirm_email_change(
+                'rawtoken', '127.0.0.1', 'test'
+            )
+
+
+class TestRevertEmailChange:
+    """Tests for AccountService.revert_email_change()."""
+
+    def _request(self, user_id: UUID) -> EmailChangeRequest:
+        return EmailChangeRequest(
+            id=uuid7(),
+            user_id=user_id,
+            old_email='old@example.com',
+            new_email='new@example.com',
+            token_hash='confirm_hash',
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            revert_token_hash='revert_hash',
+        )
+
+    @pytest.mark.asyncio
+    async def test_valid_revert_restores_and_clears_hold(
+        self,
+        account_service: AccountService,
+        mock_email_change_repo: MagicMock,
+        mock_user_repo: MagicMock,
+        mock_password_reset_token_repo: MagicMock,
+        mock_audit_log_repo: MagicMock,
+        mock_email_service: MagicMock,
+    ) -> None:
+        """Gates 2+4: revert restores old email, clears hold, audits."""
+        user_id = uuid7()
+        mock_email_change_repo.get_by_revert_token_hash.return_value = (
+            self._request(user_id)
+        )
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='new@example.com',
+            previous_email='old@example.com',
+            email_changed_at=datetime.now(timezone.utc),
+            status=UserStatus.ACTIVE,
+        )
+
+        result = await account_service.revert_email_change(
+            'rawrevert', '127.0.0.1', 'test-agent'
+        )
+
+        assert result is not None
+        mock_user_repo.revert_email.assert_awaited_once_with(user_id)
+        mock_password_reset_token_repo.delete_by_user_id.assert_awaited_once_with(
+            user_id
+        )
+        mock_email_change_repo.mark_revert_as_used.assert_awaited_once()
+        mock_audit_log_repo.insert.assert_awaited_once()
+        audit = mock_audit_log_repo.insert.await_args.args[0]
+        assert audit.action == AuditAction.EMAIL_CHANGE_REVERTED
+        mock_email_service.send_email_change_reverted_notice.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_revert_after_hold_expiry_raises(
+        self,
+        account_service: AccountService,
+        mock_email_change_repo: MagicMock,
+        mock_user_repo: MagicMock,
+    ) -> None:
+        """Gate 4: revert after the hold window is rejected."""
+        user_id = uuid7()
+        mock_email_change_repo.get_by_revert_token_hash.return_value = (
+            self._request(user_id)
+        )
+        mock_user_repo.get_by_id.return_value = User(
+            id=user_id,
+            username='testuser',
+            email='new@example.com',
+            previous_email='old@example.com',
+            email_changed_at=(
+                datetime.now(timezone.utc) - timedelta(hours=49)
+            ),
+            status=UserStatus.ACTIVE,
+        )
+
+        with pytest.raises(InvalidResetTokenError):
+            await account_service.revert_email_change(
+                'rawrevert', '127.0.0.1', 'test'
+            )
+
+    @pytest.mark.asyncio
+    async def test_used_revert_token_raises(
+        self,
+        account_service: AccountService,
+        mock_email_change_repo: MagicMock,
+    ) -> None:
+        request = self._request(uuid7())
+        request.revert_used_at = datetime.now(timezone.utc)
+        mock_email_change_repo.get_by_revert_token_hash.return_value = request
+
+        with pytest.raises(InvalidResetTokenError):
+            await account_service.revert_email_change(
+                'rawrevert', '127.0.0.1', 'test'
+            )
 
 
 class TestLogin:
@@ -915,7 +1683,9 @@ class TestLogout:
         count = await session_service.logout_all(user_id)
 
         assert count == 5
-        mock_session_repo.revoke_all_for_user.assert_called_once_with(user_id)
+        mock_session_repo.revoke_all_for_user.assert_called_once_with(
+            user_id, None
+        )
 
     @pytest.mark.asyncio
     async def test_auth_logs_contain_only_allowed_keys(

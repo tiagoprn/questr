@@ -125,6 +125,28 @@ class TestSessionRepository:
         sessions = await session_repo.get_by_user_id(user.id)
         assert all(s.is_active is False for s in sessions)
 
+    async def test_revoke_all_for_user_keeps_excepted_session(
+        self,
+        session_repo: SessionRepository,
+        db_session: AsyncSession,
+    ) -> None:
+        """Gate 5: except_session_id is excluded from the bulk revoke."""
+        user = await self._create_user(db_session)
+
+        kept = await session_repo.create(await self._build_session(user.id))
+        for _ in range(2):
+            await session_repo.create(await self._build_session(user.id))
+
+        count = await session_repo.revoke_all_for_user(
+            user.id, except_session_id=kept.id
+        )
+        assert count == 2  # noqa: PLR2004
+
+        sessions = await session_repo.get_by_user_id(user.id)
+        kept_row = next(s for s in sessions if s.id == kept.id)
+        assert kept_row.is_active is True
+        assert sum(s.is_active for s in sessions) == 1
+
     async def test_count_active_excludes_inactive_and_lapsed(
         self,
         session_repo: SessionRepository,

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from questr.common.enums import AuditAction, UserRole, UserStatus
 from questr.infrastructure.orm.models import (
     AuditLogORMModel,
+    EmailChangeORMModel,
     EmailVerificationORMModel,
+    PasswordResetTokenORMModel,
     SessionORMModel,
     UserORMModel,
 )
@@ -23,6 +25,8 @@ class User:
     id: UUID | None = None
     username: str = ''
     email: str = ''
+    previous_email: str | None = None
+    email_changed_at: datetime | None = None
     first_name: str = ''
     last_name: str = ''
     password_hash: str = ''
@@ -82,6 +86,35 @@ class EmailVerification:
     used_at: datetime | None = None
 
 
+@dataclass
+class PasswordResetToken:
+    """Password reset token domain object."""
+
+    id: UUID | None = None
+    user_id: UUID | None = None
+    token_hash: str = ''
+    expires_at: datetime | None = None
+    used_at: datetime | None = None
+
+
+@dataclass
+class EmailChangeRequest:
+    """Email change request domain object."""
+
+    id: UUID | None = None
+    user_id: UUID | None = None
+    old_email: str = ''
+    new_email: str = ''
+    token_hash: str = ''
+    expires_at: datetime | None = None
+    used_at: datetime | None = None
+    revert_token_hash: str | None = None
+    revert_used_at: datetime | None = None
+    ip: str = ''
+    user_agent: str = ''
+    created_at: datetime | None = None
+
+
 class UserRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -122,6 +155,31 @@ class UserRepository:
         orm_user = result.scalar_one_or_none()
         return self._to_domain(orm_user) if orm_user else None
 
+    async def get_by_email_or_previous(
+        self, email: str, hold_window: timedelta
+    ) -> User | None:
+        """Find a user by current email or a held previous email.
+
+        A ``previous_email`` only matches while the hold window is still
+        open (``email_changed_at + hold_window`` in the future).
+        """
+        now = datetime.now(timezone.utc)
+        hold_cutoff = now - hold_window
+        result = await self.session.execute(
+            select(UserORMModel).where(
+                or_(
+                    UserORMModel.email == email,
+                    and_(
+                        UserORMModel.previous_email == email,
+                        UserORMModel.email_changed_at.is_not(None),
+                        UserORMModel.email_changed_at > hold_cutoff,
+                    ),
+                )
+            )
+        )
+        orm_user = result.scalar_one_or_none()
+        return self._to_domain(orm_user) if orm_user else None
+
     async def update_status(
         self, user_id: UUID, status: UserStatus
     ) -> User | None:
@@ -153,12 +211,73 @@ class UserRepository:
         await self.session.flush()
         return self._to_domain(orm_user)
 
+    async def update_password(
+        self, user_id: UUID, new_hash: str
+    ) -> User | None:
+        """Set a user's password hash."""
+        result = await self.session.execute(
+            select(UserORMModel).where(UserORMModel.id == user_id)
+        )
+        orm_user = result.scalar_one_or_none()
+        if orm_user is None:
+            return None
+        orm_user.password_hash = new_hash
+        orm_user.updated_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return self._to_domain(orm_user)
+
+    async def update_email(self, user_id: UUID, new_email: str) -> User | None:
+        """Set a user's primary email."""
+        result = await self.session.execute(
+            select(UserORMModel).where(UserORMModel.id == user_id)
+        )
+        orm_user = result.scalar_one_or_none()
+        if orm_user is None:
+            return None
+        orm_user.email = new_email
+        orm_user.updated_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return self._to_domain(orm_user)
+
+    async def set_email_hold(
+        self, user_id: UUID, previous_email: str
+    ) -> User | None:
+        """Snapshot the old email and open the hold window."""
+        result = await self.session.execute(
+            select(UserORMModel).where(UserORMModel.id == user_id)
+        )
+        orm_user = result.scalar_one_or_none()
+        if orm_user is None:
+            return None
+        orm_user.previous_email = previous_email
+        orm_user.email_changed_at = datetime.now(timezone.utc)
+        orm_user.updated_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return self._to_domain(orm_user)
+
+    async def revert_email(self, user_id: UUID) -> User | None:
+        """Restore the previous email and clear the hold fields."""
+        result = await self.session.execute(
+            select(UserORMModel).where(UserORMModel.id == user_id)
+        )
+        orm_user = result.scalar_one_or_none()
+        if orm_user is None or orm_user.previous_email is None:
+            return None
+        orm_user.email = orm_user.previous_email
+        orm_user.previous_email = None
+        orm_user.email_changed_at = None
+        orm_user.updated_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return self._to_domain(orm_user)
+
     @staticmethod
     def _to_domain(orm_user: UserORMModel) -> User:
         return User(
             id=orm_user.id,
             username=orm_user.username,
             email=orm_user.email,
+            previous_email=orm_user.previous_email,
+            email_changed_at=orm_user.email_changed_at,
             first_name=orm_user.first_name,
             last_name=orm_user.last_name,
             password_hash=orm_user.password_hash,
@@ -231,6 +350,163 @@ class EmailVerificationRepository:
         )
 
 
+class PasswordResetTokenRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(self, token: PasswordResetToken) -> PasswordResetToken:
+        orm_token = PasswordResetTokenORMModel(
+            id=token.id,
+            user_id=token.user_id,
+            token_hash=token.token_hash,
+            expires_at=token.expires_at,
+            used_at=token.used_at,
+        )
+        self.session.add(orm_token)
+        await self.session.flush()
+        return self._to_domain(orm_token)
+
+    async def get_by_token_hash(
+        self, token_hash: str
+    ) -> PasswordResetToken | None:
+        result = await self.session.execute(
+            select(PasswordResetTokenORMModel).where(
+                PasswordResetTokenORMModel.token_hash == token_hash
+            )
+        )
+        orm_t = result.scalar_one_or_none()
+        return self._to_domain(orm_t) if orm_t else None
+
+    async def mark_as_used(self, token_id: UUID) -> bool:
+        result = await self.session.execute(
+            select(PasswordResetTokenORMModel).where(
+                PasswordResetTokenORMModel.id == token_id
+            )
+        )
+        orm_t = result.scalar_one_or_none()
+        if orm_t is None:
+            return False
+        orm_t.used_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return True
+
+    async def delete_by_user_id(self, user_id: UUID) -> int:
+        result = await self.session.execute(
+            delete(PasswordResetTokenORMModel).where(
+                PasswordResetTokenORMModel.user_id == user_id
+            )
+        )
+        await self.session.flush()
+        return result.rowcount
+
+    @staticmethod
+    def _to_domain(orm_t: PasswordResetTokenORMModel) -> PasswordResetToken:
+        return PasswordResetToken(
+            id=orm_t.id,
+            user_id=orm_t.user_id,
+            token_hash=orm_t.token_hash,
+            expires_at=orm_t.expires_at,
+            used_at=orm_t.used_at,
+        )
+
+
+class EmailChangeRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(self, request: EmailChangeRequest) -> EmailChangeRequest:
+        orm_request = EmailChangeORMModel(
+            id=request.id,
+            user_id=request.user_id,
+            old_email=request.old_email,
+            new_email=request.new_email,
+            token_hash=request.token_hash,
+            expires_at=request.expires_at,
+            used_at=request.used_at,
+            revert_token_hash=request.revert_token_hash,
+            revert_used_at=request.revert_used_at,
+            ip=request.ip,
+            user_agent=request.user_agent,
+        )
+        self.session.add(orm_request)
+        await self.session.flush()
+        return self._to_domain(orm_request)
+
+    async def get_by_token_hash(
+        self, token_hash: str
+    ) -> EmailChangeRequest | None:
+        result = await self.session.execute(
+            select(EmailChangeORMModel).where(
+                EmailChangeORMModel.token_hash == token_hash
+            )
+        )
+        orm_r = result.scalar_one_or_none()
+        return self._to_domain(orm_r) if orm_r else None
+
+    async def get_by_revert_token_hash(
+        self, revert_token_hash: str
+    ) -> EmailChangeRequest | None:
+        result = await self.session.execute(
+            select(EmailChangeORMModel).where(
+                EmailChangeORMModel.revert_token_hash == revert_token_hash
+            )
+        )
+        orm_r = result.scalar_one_or_none()
+        return self._to_domain(orm_r) if orm_r else None
+
+    async def mark_as_used(self, request_id: UUID) -> bool:
+        result = await self.session.execute(
+            select(EmailChangeORMModel).where(
+                EmailChangeORMModel.id == request_id
+            )
+        )
+        orm_r = result.scalar_one_or_none()
+        if orm_r is None:
+            return False
+        orm_r.used_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return True
+
+    async def mark_revert_as_used(self, request_id: UUID) -> bool:
+        result = await self.session.execute(
+            select(EmailChangeORMModel).where(
+                EmailChangeORMModel.id == request_id
+            )
+        )
+        orm_r = result.scalar_one_or_none()
+        if orm_r is None:
+            return False
+        orm_r.revert_used_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return True
+
+    async def delete_by_user_id(self, user_id: UUID) -> int:
+        result = await self.session.execute(
+            delete(EmailChangeORMModel).where(
+                EmailChangeORMModel.user_id == user_id
+            )
+        )
+        await self.session.flush()
+        return result.rowcount
+
+    @staticmethod
+    def _to_domain(orm_r: EmailChangeORMModel) -> EmailChangeRequest:
+        return EmailChangeRequest(
+            id=orm_r.id,
+            user_id=orm_r.user_id,
+            old_email=orm_r.old_email,
+            new_email=orm_r.new_email,
+            token_hash=orm_r.token_hash,
+            expires_at=orm_r.expires_at,
+            used_at=orm_r.used_at,
+            revert_token_hash=orm_r.revert_token_hash,
+            revert_used_at=orm_r.revert_used_at,
+            ip=orm_r.ip,
+            user_agent=orm_r.user_agent,
+            created_at=orm_r.created_at,
+        )
+
+
 class SessionRepository:
     """Repository for session persistence."""
 
@@ -280,15 +556,16 @@ class SessionRepository:
         await self.session.flush()
         return result.rowcount > 0
 
-    async def revoke_all_for_user(self, user_id: UUID) -> int:
-        result = await self.session.execute(
-            update(SessionORMModel)
-            .where(
-                SessionORMModel.user_id == user_id,
-                SessionORMModel.is_active.is_(True),
-            )
-            .values(is_active=False)
+    async def revoke_all_for_user(
+        self, user_id: UUID, except_session_id: UUID | None = None
+    ) -> int:
+        stmt = update(SessionORMModel).where(
+            SessionORMModel.user_id == user_id,
+            SessionORMModel.is_active.is_(True),
         )
+        if except_session_id is not None:
+            stmt = stmt.where(SessionORMModel.id != except_session_id)
+        result = await self.session.execute(stmt.values(is_active=False))
         await self.session.flush()
         return result.rowcount
 

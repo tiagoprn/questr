@@ -9,6 +9,8 @@ from questr.common.exceptions import (
     AuthenticationError,
     AuthorizationError,
     EmailNotVerifiedError,
+    InvalidCurrentPasswordError,
+    InvalidResetTokenError,
     InvalidVerificationTokenError,
     RateLimiterUnavailableError,
     RateLimitExceededError,
@@ -37,12 +39,20 @@ def create_app() -> FastAPI:
     app.add_middleware(CsrfMiddleware)
 
     app.add_exception_handler(
+        ValueError,
+        _value_error_handler,
+    )
+    app.add_exception_handler(
         UserAlreadyExistsError,
         _user_already_exists_handler,
     )
     app.add_exception_handler(
         InvalidVerificationTokenError,
         _invalid_token_handler,
+    )
+    app.add_exception_handler(
+        InvalidResetTokenError,
+        _invalid_reset_token_handler,
     )
     app.add_exception_handler(
         RateLimitExceededError,
@@ -59,6 +69,10 @@ def create_app() -> FastAPI:
     app.add_exception_handler(
         AuthenticationError,
         _authentication_error_handler,
+    )
+    app.add_exception_handler(
+        InvalidCurrentPasswordError,
+        _invalid_current_password_handler,
     )
     app.add_exception_handler(
         EmailNotVerifiedError,
@@ -93,6 +107,15 @@ def create_app() -> FastAPI:
     return app
 
 
+async def _value_error_handler(
+    request: Request, exc: ValueError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content={'detail': str(exc)},
+    )
+
+
 async def _user_already_exists_handler(
     request: Request, exc: UserAlreadyExistsError
 ) -> JSONResponse:
@@ -108,6 +131,18 @@ async def _invalid_token_handler(
     return JSONResponse(
         status_code=400,
         content={'detail': str(exc)},
+    )
+
+
+async def _invalid_reset_token_handler(
+    request: Request, exc: InvalidResetTokenError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content={
+            'detail': str(exc),
+            'recovery': ['forgot_password'],
+        },
     )
 
 
@@ -144,6 +179,18 @@ async def _authentication_error_handler(
     return JSONResponse(
         status_code=401,
         content={'detail': str(exc)},
+    )
+
+
+async def _invalid_current_password_handler(
+    request: Request, exc: InvalidCurrentPasswordError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content={
+            'detail': str(exc),
+            'error_code': 'invalid_current_password',
+        },
     )
 
 

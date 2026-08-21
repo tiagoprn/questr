@@ -6,7 +6,9 @@ from factory.faker import Faker
 
 from questr.common.enums import UserRole, UserStatus
 from questr.infrastructure.orm.models import (
+    EmailChangeORMModel,
     EmailVerificationORMModel,
+    PasswordResetTokenORMModel,
     SessionORMModel,
     UserORMModel,
 )
@@ -19,6 +21,8 @@ class UserFactory(factory.Factory):
     id = factory.LazyFunction(uuid7)
     username = Faker('user_name')
     email = Faker('email')
+    previous_email = None
+    email_changed_at = None
     first_name = Faker('first_name')
     last_name = Faker('last_name')
     # NOTE: do not remove the 2 comments below, they must stay because it
@@ -44,6 +48,38 @@ class EmailVerificationFactory(factory.Factory):
         lambda: datetime.now(timezone.utc) + timedelta(hours=24)
     )
     used_at = None
+
+
+class PasswordResetTokenFactory(factory.Factory):
+    class Meta:
+        model = PasswordResetTokenORMModel
+
+    id = factory.LazyFunction(uuid7)
+    user_id = factory.LazyFunction(uuid7)
+    token_hash = Faker('sha256')
+    expires_at = factory.LazyFunction(
+        lambda: datetime.now(timezone.utc) + timedelta(hours=1)
+    )
+    used_at = None
+
+
+class EmailChangeRequestFactory(factory.Factory):
+    class Meta:
+        model = EmailChangeORMModel
+
+    id = factory.LazyFunction(uuid7)
+    user_id = factory.LazyFunction(uuid7)
+    old_email = Faker('email')
+    new_email = Faker('email')
+    token_hash = Faker('sha256')
+    expires_at = factory.LazyFunction(
+        lambda: datetime.now(timezone.utc) + timedelta(hours=24)
+    )
+    used_at = None
+    revert_token_hash = Faker('sha256')
+    revert_used_at = None
+    ip = factory.Faker('ipv4')
+    user_agent = 'Mozilla/5.0 Test'
 
 
 class SessionFactory(factory.Factory):

@@ -38,6 +38,20 @@ class Settings(BaseSettings):
     RATE_LIMIT_RESEND_MAX: int = 3
     RATE_LIMIT_RESEND_WINDOW_HOURS: int = 1
 
+    # Password reset token TTL (hours)
+    RESET_TOKEN_TTL_HOURS: int = 1
+
+    # Email change hold window (hours)
+    EMAIL_CHANGE_HOLD_HOURS: int = 48
+
+    # Forgot password rate limiting
+    RATE_LIMIT_FORGOT_MAX: int = 3
+    RATE_LIMIT_FORGOT_WINDOW_HOURS: int = 1
+
+    # Change email rate limiting
+    RATE_LIMIT_EMAIL_CHANGE_MAX: int = 3
+    RATE_LIMIT_EMAIL_CHANGE_WINDOW_HOURS: int = 1
+
     # Login throttling
     LOGIN_PER_ACCOUNT_MAX_ATTEMPTS: int = 5
     LOGIN_PER_ACCOUNT_WINDOW_MINUTES: int = 15

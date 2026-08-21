@@ -14,10 +14,17 @@ from questr.common.exceptions import (
     AccountSuspendedError,
     AuthenticationError,
     EmailNotVerifiedError,
+    InvalidCurrentPasswordError,
+    InvalidResetTokenError,
+    RateLimitExceededError,
     TooManyActiveSessionsError,
 )
-from questr.domains.users.api import get_session_service
+from questr.domains.users.api import (
+    get_account_service,
+    get_session_service,
+)
 from questr.domains.users.service import (
+    AccountService,
     SessionPrincipal,
     SessionService,
 )
@@ -93,6 +100,37 @@ class TestVerifyEmail:
                 self, to_email: str, token: str
             ) -> bool:
                 captured['token'] = token
+                return True
+
+            async def send_password_changed_email(self, to_email: str) -> bool:
+                return True
+
+            async def send_password_reset_email(
+                self, to_email: str, token: str
+            ) -> bool:
+                return True
+
+            async def send_password_reset_done_email(
+                self, to_email: str
+            ) -> bool:
+                return True
+
+            async def send_email_change_confirm_email(
+                self, to_email: str, token: str
+            ) -> bool:
+                return True
+
+            async def send_email_change_old_notification(
+                self, to_email: str, revert_token: str
+            ) -> bool:
+                return True
+
+            async def send_email_changed_notice(self, to_email: str) -> bool:
+                return True
+
+            async def send_email_change_reverted_notice(
+                self, to_email: str
+            ) -> bool:
                 return True
 
         app.dependency_overrides[get_email_service] = RecordingEmailService
@@ -404,3 +442,331 @@ class TestGetCurrentUser:
         assert data['csrf_token'] == 'echoed-csrf-token'
         assert data['is_impersonation'] is False
         assert data['impersonator_session_id'] is None
+
+
+class TestChangePasswordRouter:
+    """Tests for POST /api/v1/auth/me/password."""
+
+    def _override(
+        self,
+        app: FastAPI,
+        *,
+        change_password: AsyncMock | None = None,
+        logout_all: AsyncMock | None = None,
+        rotate_csrf: AsyncMock | None = None,
+    ) -> tuple[MagicMock, MagicMock]:
+        user_id = uuid7()
+        mock_user = MagicMock(
+            id=user_id,
+            username='testuser',
+            email='test@example.com',
+            first_name='Test',
+            last_name='User',
+            role=UserRole.USER,
+            status=UserStatus.ACTIVE,
+        )
+        principal = SessionPrincipal(
+            user=mock_user,
+            is_impersonation=False,
+            impersonator_session_id=None,
+        )
+        svc = MagicMock(spec=SessionService)
+        svc.validate_session = AsyncMock(return_value=principal)
+        svc.logout_all = logout_all or AsyncMock(return_value=2)
+        svc.rotate_csrf = rotate_csrf or AsyncMock(return_value='new-csrf')
+
+        acct = MagicMock(spec=AccountService)
+        acct.change_password = change_password or AsyncMock()
+
+        app.dependency_overrides[get_session_service] = lambda: svc
+        app.dependency_overrides[get_account_service] = lambda: acct
+        return svc, acct
+
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_200_and_rotates_csrf(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """Gate 5: 200, other sessions revoked, current kept, CSRF rotated."""
+        svc, acct = self._override(app)
+        client.cookies['session_id'] = str(uuid7())
+        client.cookies['csrf_token'] = 'token'
+
+        resp = await client.post(
+            '/api/v1/auth/me/password',
+            json={
+                'current_password': 'OldPass1!',
+                'new_password': 'NewPass1!',
+            },
+            headers={'X-CSRF-Token': 'token'},
+        )
+        assert resp.status_code == 200
+        assert resp.json()['message'] == 'Password changed'
+
+        acct.change_password.assert_awaited_once()
+        svc.logout_all.assert_awaited_once()
+        svc.rotate_csrf.assert_awaited_once()
+        # The rotated CSRF is set as a cookie.
+        set_cookie = resp.headers.get_list('set-cookie')
+        assert any('csrf_token=new-csrf' in h for h in set_cookie)
+
+    @pytest.mark.asyncio
+    async def test_invalid_current_password_returns_400_with_error_code(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """T-004: InvalidCurrentPasswordError -> 400 + error_code."""
+        self._override(
+            app,
+            change_password=AsyncMock(
+                side_effect=InvalidCurrentPasswordError('bad')
+            ),
+        )
+        client.cookies['session_id'] = str(uuid7())
+        client.cookies['csrf_token'] = 'token'
+
+        resp = await client.post(
+            '/api/v1/auth/me/password',
+            json={'current_password': 'wrong', 'new_password': 'NewPass1!'},
+            headers={'X-CSRF-Token': 'token'},
+        )
+        assert resp.status_code == 400
+        assert resp.json()['error_code'] == 'invalid_current_password'
+
+
+class TestForgotPasswordRouter:
+    """Tests for POST /api/v1/auth/forgot-password."""
+
+    @pytest.mark.asyncio
+    async def test_exempt_and_uniform_200(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """Pre-auth exemption: no CSRF needed, uniform 200."""
+        acct = MagicMock(spec=AccountService)
+        acct.request_password_reset = AsyncMock(return_value=True)
+        app.dependency_overrides[get_account_service] = lambda: acct
+
+        resp = await client.post(
+            '/api/v1/auth/forgot-password',
+            json={'email': 'nobody@example.com'},
+        )
+        assert resp.status_code == 200
+        assert 'message' in resp.json()
+        acct.request_password_reset.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_maps_to_429(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """Gate 6: RateLimitExceededError -> 429."""
+        acct = MagicMock(spec=AccountService)
+        acct.request_password_reset = AsyncMock(
+            side_effect=RateLimitExceededError('limited')
+        )
+        app.dependency_overrides[get_account_service] = lambda: acct
+
+        resp = await client.post(
+            '/api/v1/auth/forgot-password',
+            json={'email': 'nobody@example.com'},
+        )
+        assert resp.status_code == 429
+        assert resp.json()['error_code'] == 'rate_limited'
+
+
+class TestResetPasswordRouter:
+    """Tests for POST /api/v1/auth/reset-password."""
+
+    @pytest.mark.asyncio
+    async def test_exempt_and_200_revokes_sessions(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """Gate 5: reset revokes all sessions; pre-auth exemption."""
+        user_id = uuid7()
+        acct = MagicMock(spec=AccountService)
+        acct.reset_password = AsyncMock(return_value=MagicMock(id=user_id))
+        svc = MagicMock(spec=SessionService)
+        svc.logout_all = AsyncMock(return_value=2)
+        app.dependency_overrides[get_account_service] = lambda: acct
+        app.dependency_overrides[get_session_service] = lambda: svc
+
+        resp = await client.post(
+            '/api/v1/auth/reset-password',
+            json={'token': 'rawtoken', 'new_password': 'NewPass1!'},
+        )
+        assert resp.status_code == 200
+        assert resp.json()['message'] == 'Password reset successfully'
+        svc.logout_all.assert_awaited_once_with(user_id)
+
+    @pytest.mark.asyncio
+    async def test_invalid_token_returns_400_with_recovery(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """T-015: InvalidResetTokenError -> 400 + recovery hint."""
+        acct = MagicMock(spec=AccountService)
+        acct.reset_password = AsyncMock(
+            side_effect=InvalidResetTokenError('bad')
+        )
+        app.dependency_overrides[get_account_service] = lambda: acct
+
+        resp = await client.post(
+            '/api/v1/auth/reset-password',
+            json={'token': 'rawtoken', 'new_password': 'NewPass1!'},
+        )
+        assert resp.status_code == 400
+        assert resp.json()['recovery'] == ['forgot_password']
+
+
+class TestChangeEmailRouter:
+    """Tests for POST /api/v1/auth/me/email (+ confirm/revert)."""
+
+    @pytest.mark.asyncio
+    async def test_change_email_requires_auth(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """me/email is auth-required: missing session -> 401."""
+        svc = MagicMock(spec=SessionService)
+        app.dependency_overrides[get_session_service] = lambda: svc
+        resp = await client.post(
+            '/api/v1/auth/me/email',
+            json={'new_email': 'new@example.com', 'current_password': 'x'},
+        )
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_change_email_happy_path(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """Auth + CSRF: change-email request returns 200."""
+        user_id = uuid7()
+        mock_user = MagicMock(
+            id=user_id,
+            username='testuser',
+            email='old@example.com',
+            first_name='Test',
+            last_name='User',
+            role=UserRole.USER,
+            status=UserStatus.ACTIVE,
+        )
+        principal = SessionPrincipal(
+            user=mock_user,
+            is_impersonation=False,
+            impersonator_session_id=None,
+        )
+        svc = MagicMock(spec=SessionService)
+        svc.validate_session = AsyncMock(return_value=principal)
+        acct = MagicMock(spec=AccountService)
+        acct.request_email_change = AsyncMock(return_value=True)
+        app.dependency_overrides[get_session_service] = lambda: svc
+        app.dependency_overrides[get_account_service] = lambda: acct
+
+        client.cookies['session_id'] = str(uuid7())
+        client.cookies['csrf_token'] = 'token'
+        resp = await client.post(
+            '/api/v1/auth/me/email',
+            json={
+                'new_email': 'new@example.com',
+                'current_password': 'OldPass1!',
+            },
+            headers={'X-CSRF-Token': 'token'},
+        )
+        assert resp.status_code == 200
+        assert 'message' in resp.json()
+        acct.request_email_change.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_confirm_exempt_and_revokes_sessions(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """Gate 5: confirm is exempt and revokes all sessions."""
+        user_id = uuid7()
+        acct = MagicMock(spec=AccountService)
+        acct.confirm_email_change = AsyncMock(
+            return_value=MagicMock(id=user_id)
+        )
+        svc = MagicMock(spec=SessionService)
+        svc.logout_all = AsyncMock(return_value=2)
+        app.dependency_overrides[get_account_service] = lambda: acct
+        app.dependency_overrides[get_session_service] = lambda: svc
+
+        resp = await client.post(
+            '/api/v1/auth/me/email/confirm',
+            json={'token': 'rawtoken'},
+        )
+        assert resp.status_code == 200
+        assert resp.json()['message'] == 'Email changed successfully'
+        svc.logout_all.assert_awaited_once_with(user_id)
+
+    @pytest.mark.asyncio
+    async def test_revert_exempt_and_revokes_sessions(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """Gate 5: revert is exempt and revokes all sessions."""
+        user_id = uuid7()
+        acct = MagicMock(spec=AccountService)
+        acct.revert_email_change = AsyncMock(
+            return_value=MagicMock(id=user_id)
+        )
+        svc = MagicMock(spec=SessionService)
+        svc.logout_all = AsyncMock(return_value=2)
+        app.dependency_overrides[get_account_service] = lambda: acct
+        app.dependency_overrides[get_session_service] = lambda: svc
+
+        resp = await client.post(
+            '/api/v1/auth/me/email/revert',
+            json={'token': 'rawrevert'},
+        )
+        assert resp.status_code == 200
+        assert resp.json()['message'] == 'Email change reverted'
+        svc.logout_all.assert_awaited_once_with(user_id)
+
+    @pytest.mark.asyncio
+    async def test_confirm_invalid_token_returns_recovery(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """T-015: confirm rejection carries the recovery hint."""
+        acct = MagicMock(spec=AccountService)
+        acct.confirm_email_change = AsyncMock(
+            side_effect=InvalidResetTokenError('bad')
+        )
+        app.dependency_overrides[get_account_service] = lambda: acct
+
+        resp = await client.post(
+            '/api/v1/auth/me/email/confirm',
+            json={'token': 'rawtoken'},
+        )
+        assert resp.status_code == 400
+        assert resp.json()['recovery'] == ['forgot_password']
+
+    @pytest.mark.asyncio
+    async def test_change_email_rate_limited_429(
+        self, app: FastAPI, client: AsyncClient
+    ) -> None:
+        """Gate 6: rate limit maps to 429."""
+        user_id = uuid7()
+        mock_user = MagicMock(
+            id=user_id, username='testuser', email='old@example.com'
+        )
+        principal = SessionPrincipal(
+            user=mock_user,
+            is_impersonation=False,
+            impersonator_session_id=None,
+        )
+        svc = MagicMock(spec=SessionService)
+        svc.validate_session = AsyncMock(return_value=principal)
+        acct = MagicMock(spec=AccountService)
+        acct.request_email_change = AsyncMock(
+            side_effect=RateLimitExceededError('limited')
+        )
+        app.dependency_overrides[get_session_service] = lambda: svc
+        app.dependency_overrides[get_account_service] = lambda: acct
+
+        client.cookies['session_id'] = str(uuid7())
+        client.cookies['csrf_token'] = 'token'
+        resp = await client.post(
+            '/api/v1/auth/me/email',
+            json={
+                'new_email': 'new@example.com',
+                'current_password': 'OldPass1!',
+            },
+            headers={'X-CSRF-Token': 'token'},
+        )
+        assert resp.status_code == 429
+        assert resp.json()['error_code'] == 'rate_limited'

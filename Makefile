@@ -186,6 +186,24 @@ dev-hurl-verify-email:  ## signup + Mailpit token + verify-email + login flow us
 dev-hurl-logout-all:  ## login + logout-all + /me(401) flow using hurl (requires the dev-server up)
 	@hurl --very-verbose --variables-file hurl/vars/auth/logout-all/logout-all.vars hurl/auth/logout-all.hurl
 
+dev-hurl-change-password:  ## login + change-password + re-login flow using hurl (requires the dev-server up)
+	@hurl --very-verbose --variables-file hurl/vars/auth/change-password/change-password.vars hurl/auth/change-password.hurl
+
+dev-hurl-forgot-password:  ## signup + forgot-password flow using hurl (requires the dev-server up)
+	@hurl --very-verbose --variables-file hurl/vars/auth/forgot-password/forgot-password.vars hurl/auth/forgot-password.hurl
+
+dev-hurl-reset-password:  ## signup + forgot + reset + re-login flow using hurl (requires dev-server + Mailpit)
+	@hurl --very-verbose --variables-file hurl/vars/auth/reset-password/reset-password.vars hurl/auth/reset-password.hurl
+
+dev-hurl-change-email:  ## signup + login + change-email flow using hurl (requires dev-server + Mailpit)
+	@hurl --very-verbose --variables-file hurl/vars/auth/change-email/change-email.vars hurl/auth/change-email.hurl
+
+dev-hurl-confirm-email:  ## change + confirm email flow using hurl (requires dev-server + Mailpit)
+	@hurl --very-verbose --variables-file hurl/vars/auth/confirm-email/confirm-email.vars hurl/auth/confirm-email.hurl
+
+dev-hurl-revert-email:  ## change + confirm + revert email flow using hurl (requires dev-server + Mailpit)
+	@hurl --very-verbose --variables-file hurl/vars/auth/revert-email/revert-email.vars hurl/auth/revert-email.hurl
+
 dev-hurl-admin-impersonate:  ## superuser impersonate flow using hurl (requires dev-server + seeded superuser)
 	@hurl --very-verbose --variables-file hurl/vars/auth/impersonate/impersonate.vars hurl/auth/admin-impersonate.hurl
 

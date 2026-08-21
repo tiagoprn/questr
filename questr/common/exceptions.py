@@ -23,12 +23,6 @@ class ResourceNotFoundError(QuestrException):
     pass
 
 
-class InvalidGameStateError(QuestrException):
-    """Raised when a game state transition is invalid."""
-
-    pass
-
-
 class AuthenticationError(QuestrException):
     """Raised for authentication failures."""
 
@@ -78,6 +72,21 @@ class InvalidVerificationTokenError(QuestrException):
     """Raised for invalid/expired verification tokens."""
 
     pass
+
+
+class InvalidResetTokenError(InvalidVerificationTokenError):
+    """Raised for invalid/expired/used password-reset tokens."""
+
+    pass
+
+
+class InvalidCurrentPasswordError(StructuredQuestrException):
+    """Raised when the supplied current password is incorrect."""
+
+    def __init__(self, message: str = '') -> None:
+        super().__init__(
+            error_code='invalid_current_password', message=message
+        )
 
 
 class UserAlreadyExistsError(QuestrException):

@@ -70,6 +70,35 @@ async def _signup(
             captured['token'] = token
             return True
 
+        async def send_password_changed_email(self, to_email: str) -> bool:
+            return True
+
+        async def send_password_reset_email(
+            self, to_email: str, token: str
+        ) -> bool:
+            return True
+
+        async def send_password_reset_done_email(self, to_email: str) -> bool:
+            return True
+
+        async def send_email_change_confirm_email(
+            self, to_email: str, token: str
+        ) -> bool:
+            return True
+
+        async def send_email_change_old_notification(
+            self, to_email: str, revert_token: str
+        ) -> bool:
+            return True
+
+        async def send_email_changed_notice(self, to_email: str) -> bool:
+            return True
+
+        async def send_email_change_reverted_notice(
+            self, to_email: str
+        ) -> bool:
+            return True
+
     app.dependency_overrides[get_email_service] = CaptureEmail
 
     signup_resp = await client.post(

@@ -1,6 +1,6 @@
 # ruff: noqa: PLR6301,PLR2004,PLR0913,PLR0917
 from datetime import datetime, timedelta, timezone
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 import pytest
 import pytest_asyncio
@@ -8,7 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from questr.common.enums import UserRole, UserStatus
 from questr.domains.users.repository import (
+    EmailChangeRepository,
+    EmailChangeRequest,
     EmailVerificationRepository,
+    PasswordResetToken,
+    PasswordResetTokenRepository,
     UserRepository,
 )
 from questr.domains.users.service import EmailVerification, User
@@ -134,6 +138,89 @@ class TestUserRepository:
         assert updated is not None
         assert updated.status == UserStatus.ACTIVE
 
+    @pytest.mark.asyncio
+    async def test_update_password(
+        self,
+        created_user: tuple,
+        db_session: AsyncSession,
+    ) -> None:
+        repo, created = created_user
+        updated = await repo.update_password(created.id, 'newhash456')
+        await db_session.flush()
+        assert updated is not None
+        assert updated.password_hash == 'newhash456'
+
+        fetched = await repo.get_by_id(created.id)
+        assert fetched is not None
+        assert fetched.password_hash == 'newhash456'
+
+    @pytest.mark.asyncio
+    async def test_get_by_email_or_previous_matches_current_email(
+        self,
+        created_user: tuple,
+        db_session: AsyncSession,
+    ) -> None:
+        """Pre-CE: previous_email is None, so current email still matches."""
+        repo, created = created_user
+        found = await repo.get_by_email_or_previous(
+            created.email, timedelta(hours=48)
+        )
+        assert found is not None
+        assert found.id == created.id
+
+    @pytest.mark.asyncio
+    async def test_get_by_email_or_previous_matches_held_previous_email(
+        self,
+        created_user: tuple,
+        db_session: AsyncSession,
+    ) -> None:
+        """Gate 3: a held previous_email matches within the hold window."""
+        repo, created = created_user
+        orm = await db_session.get(UserORMModel, created.id)
+        orm.previous_email = 'old@example.com'
+        orm.email_changed_at = datetime.now(timezone.utc)
+        await db_session.flush()
+
+        found = await repo.get_by_email_or_previous(
+            'old@example.com', timedelta(hours=48)
+        )
+        assert found is not None
+        assert found.id == created.id
+
+    @pytest.mark.asyncio
+    async def test_get_by_email_or_previous_ignores_expired_hold(
+        self,
+        created_user: tuple,
+        db_session: AsyncSession,
+    ) -> None:
+        """Gate 3: a previous_email outside the hold window does not match."""
+        repo, created = created_user
+        orm = await db_session.get(UserORMModel, created.id)
+        orm.previous_email = 'old@example.com'
+        orm.email_changed_at = datetime.now(timezone.utc)
+        await db_session.flush()
+
+        found = await repo.get_by_email_or_previous(
+            'old@example.com', timedelta(hours=0)
+        )
+        assert found is None
+
+    @pytest.mark.asyncio
+    async def test_update_email(
+        self,
+        created_user: tuple,
+        db_session: AsyncSession,
+    ) -> None:
+        repo, created = created_user
+        updated = await repo.update_email(created.id, 'new@example.com')
+        await db_session.flush()
+        assert updated is not None
+        assert updated.email == 'new@example.com'
+
+        fetched = await repo.get_by_id(created.id)
+        assert fetched is not None
+        assert fetched.email == 'new@example.com'
+
 
 class TestEmailVerificationRepository:
     @pytest_asyncio.fixture
@@ -228,5 +315,211 @@ class TestEmailVerificationRepository:
         await db_session.flush()
 
         count = await vrepo.delete_by_user_id(orm_user.id)
+        await db_session.flush()
+        assert count >= 1
+
+
+class TestPasswordResetTokenRepository:
+    @pytest_asyncio.fixture
+    async def trepo(
+        self, db_session: AsyncSession
+    ) -> PasswordResetTokenRepository:
+        return PasswordResetTokenRepository(db_session)
+
+    @pytest_asyncio.fixture
+    async def orm_user(self, db_session: AsyncSession) -> UserORMModel:
+        user = UserFactory()
+        db_session.add(user)
+        await db_session.flush()
+        return user
+
+    @pytest.mark.asyncio
+    async def test_create_inserts_token(
+        self,
+        trepo: PasswordResetTokenRepository,
+        db_session: AsyncSession,
+        orm_user: UserORMModel,
+    ) -> None:
+        token = PasswordResetToken(
+            id=uuid7(),
+            user_id=orm_user.id,
+            token_hash='resethash123',
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        result = await trepo.create(token)
+        await db_session.flush()
+        assert result.token_hash == 'resethash123'
+
+    @pytest.mark.asyncio
+    async def test_get_by_token_hash(
+        self,
+        trepo: PasswordResetTokenRepository,
+        db_session: AsyncSession,
+        orm_user: UserORMModel,
+    ) -> None:
+        token_hash = 'findme_reset_456'
+        await trepo.create(
+            PasswordResetToken(
+                id=uuid7(),
+                user_id=orm_user.id,
+                token_hash=token_hash,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+        )
+        await db_session.flush()
+
+        found = await trepo.get_by_token_hash(token_hash)
+        assert found is not None
+        assert found.token_hash == token_hash
+
+    @pytest.mark.asyncio
+    async def test_mark_as_used(
+        self,
+        trepo: PasswordResetTokenRepository,
+        db_session: AsyncSession,
+        orm_user: UserORMModel,
+    ) -> None:
+        created = await trepo.create(
+            PasswordResetToken(
+                id=uuid7(),
+                user_id=orm_user.id,
+                token_hash='used_reset_hash',
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+        )
+        await db_session.flush()
+
+        result = await trepo.mark_as_used(created.id)
+        await db_session.flush()
+        assert result is True
+
+        updated = await trepo.get_by_token_hash('used_reset_hash')
+        assert updated is not None
+        assert updated.used_at is not None
+
+    @pytest.mark.asyncio
+    async def test_delete_by_user_id(
+        self,
+        trepo: PasswordResetTokenRepository,
+        db_session: AsyncSession,
+        orm_user: UserORMModel,
+    ) -> None:
+        await trepo.create(
+            PasswordResetToken(
+                id=uuid7(),
+                user_id=orm_user.id,
+                token_hash='delete_reset_hash',
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+        )
+        await db_session.flush()
+
+        count = await trepo.delete_by_user_id(orm_user.id)
+        await db_session.flush()
+        assert count >= 1
+
+
+class TestEmailChangeRepository:
+    @pytest_asyncio.fixture
+    async def erepo(self, db_session: AsyncSession) -> EmailChangeRepository:
+        return EmailChangeRepository(db_session)
+
+    @pytest_asyncio.fixture
+    async def orm_user(self, db_session: AsyncSession) -> UserORMModel:
+        user = UserFactory()
+        db_session.add(user)
+        await db_session.flush()
+        return user
+
+    def _request(self, user_id: UUID) -> EmailChangeRequest:
+        return EmailChangeRequest(
+            id=uuid7(),
+            user_id=user_id,
+            old_email='old@example.com',
+            new_email='new@example.com',
+            token_hash='confirm_hash',
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            revert_token_hash='revert_hash',
+            ip='127.0.0.1',
+            user_agent='test',
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_inserts_request(
+        self,
+        erepo: EmailChangeRepository,
+        db_session: AsyncSession,
+        orm_user: UserORMModel,
+    ) -> None:
+        result = await erepo.create(self._request(orm_user.id))
+        await db_session.flush()
+        assert result.new_email == 'new@example.com'
+
+    @pytest.mark.asyncio
+    async def test_get_by_token_hash(
+        self,
+        erepo: EmailChangeRepository,
+        db_session: AsyncSession,
+        orm_user: UserORMModel,
+    ) -> None:
+        await erepo.create(self._request(orm_user.id))
+        await db_session.flush()
+        found = await erepo.get_by_token_hash('confirm_hash')
+        assert found is not None
+        assert found.new_email == 'new@example.com'
+
+    @pytest.mark.asyncio
+    async def test_get_by_revert_token_hash(
+        self,
+        erepo: EmailChangeRepository,
+        db_session: AsyncSession,
+        orm_user: UserORMModel,
+    ) -> None:
+        await erepo.create(self._request(orm_user.id))
+        await db_session.flush()
+        found = await erepo.get_by_revert_token_hash('revert_hash')
+        assert found is not None
+        assert found.old_email == 'old@example.com'
+
+    @pytest.mark.asyncio
+    async def test_mark_as_used(
+        self,
+        erepo: EmailChangeRepository,
+        db_session: AsyncSession,
+        orm_user: UserORMModel,
+    ) -> None:
+        created = await erepo.create(self._request(orm_user.id))
+        await db_session.flush()
+        assert await erepo.mark_as_used(created.id) is True
+        await db_session.flush()
+        updated = await erepo.get_by_token_hash('confirm_hash')
+        assert updated is not None
+        assert updated.used_at is not None
+
+    @pytest.mark.asyncio
+    async def test_mark_revert_as_used(
+        self,
+        erepo: EmailChangeRepository,
+        db_session: AsyncSession,
+        orm_user: UserORMModel,
+    ) -> None:
+        created = await erepo.create(self._request(orm_user.id))
+        await db_session.flush()
+        assert await erepo.mark_revert_as_used(created.id) is True
+        await db_session.flush()
+        updated = await erepo.get_by_revert_token_hash('revert_hash')
+        assert updated is not None
+        assert updated.revert_used_at is not None
+
+    @pytest.mark.asyncio
+    async def test_delete_by_user_id(
+        self,
+        erepo: EmailChangeRepository,
+        db_session: AsyncSession,
+        orm_user: UserORMModel,
+    ) -> None:
+        await erepo.create(self._request(orm_user.id))
+        await db_session.flush()
+        count = await erepo.delete_by_user_id(orm_user.id)
         await db_session.flush()
         assert count >= 1

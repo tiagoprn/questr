@@ -19,6 +19,8 @@ from questr.common.exceptions import (
     AccountSuspendedError,
     AuthenticationError,
     EmailNotVerifiedError,
+    InvalidCurrentPasswordError,
+    InvalidResetTokenError,
     InvalidVerificationTokenError,
     RateLimitExceededError,
     TooManyActiveSessionsError,
@@ -27,13 +29,18 @@ from questr.common.exceptions import (
 from questr.domains.users.repository import (
     AuditLog,
     AuditLogRepository,
+    EmailChangeRepository,
+    EmailChangeRequest,
     EmailVerification,
     EmailVerificationRepository,
+    PasswordResetToken,
+    PasswordResetTokenRepository,
     Session,
     SessionRepository,
     User,
     UserRepository,
 )
+from questr.infrastructure.dual_rate_limiter import DualRateLimiter
 from questr.infrastructure.email import BaseEmailService
 from questr.infrastructure.login_rate_limiter import LoginRateLimiter
 from questr.infrastructure.rate_limiter import RedisRateLimiter
@@ -86,8 +93,8 @@ def generate_verification_token() -> tuple[str, str]:
     return raw_token, token_hash
 
 
-def get_token_expiry() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(hours=24)
+def get_token_expiry(ttl: timedelta = timedelta(hours=24)) -> datetime:
+    return datetime.now(timezone.utc) + ttl
 
 
 def sanitize_ip(client_ip: str) -> str:
@@ -145,20 +152,32 @@ def verify_password(plain: str, hashed: str) -> bool:
 class AccountService:
     """Account lifecycle: signup, email verification, resend.
 
-    deps: user_repo, verification_repo, email_service, rate_limiter.
+    deps: user_repo, verification_repo, email_service, rate_limiter,
+    login_rate_limiter, reset_token_repo, audit_repo, dual_rate_limiter,
+    email_change_repo.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913,PLR0917
         self,
         user_repo: UserRepository,
         verification_repo: EmailVerificationRepository,
         email_service: BaseEmailService,
         rate_limiter: RedisRateLimiter,
+        login_rate_limiter: LoginRateLimiter,
+        password_reset_token_repo: PasswordResetTokenRepository,
+        audit_repo: AuditLogRepository,
+        dual_rate_limiter: DualRateLimiter,
+        email_change_repo: EmailChangeRepository,
     ) -> None:
         self.user_repo = user_repo
         self.verification_repo = verification_repo
         self.email_service = email_service
         self.rate_limiter = rate_limiter
+        self.login_rate_limiter = login_rate_limiter
+        self.password_reset_token_repo = password_reset_token_repo
+        self.audit_repo = audit_repo
+        self.dual_rate_limiter = dual_rate_limiter
+        self.email_change_repo = email_change_repo
 
     async def signup(  # noqa: PLR0913,PLR0917
         self,
@@ -272,6 +291,347 @@ class AccountService:
         await self.email_service.send_verification_email(email, raw_token)
 
         return True
+
+    async def change_password(
+        self,
+        user_id: UUID,
+        current_password: str,
+        new_password: str,
+        client_ip: str,
+        user_agent: str,
+    ) -> User:
+        """Change the authenticated user's password.
+
+        Gate 1: current-password lockout via the login rate limiter.
+        Gate 2: invalidate outstanding password-reset tokens.
+
+        Raises:
+            InvalidCurrentPasswordError: if the current password is wrong.
+            ValueError: if the new password is weak (400 via T-003).
+        """
+        user = await self.user_repo.get_by_id(user_id)
+        if user is None:
+            raise AuthenticationError('Not authenticated')
+
+        await self.login_rate_limiter.check_login_allowed(
+            user.email, client_ip
+        )
+
+        if not verify_password(current_password, user.password_hash):
+            await self.login_rate_limiter.record_failure(user.email, client_ip)
+            raise InvalidCurrentPasswordError('Current password is incorrect')
+
+        await self.login_rate_limiter.record_success(user.email)
+
+        result = validate_password(new_password)
+        if not result.is_valid:
+            raise ValueError('; '.join(result.errors))
+
+        new_hash = hash_password(new_password)
+        await self.user_repo.update_password(user_id, new_hash)
+
+        await self.password_reset_token_repo.delete_by_user_id(user_id)
+
+        await self.audit_repo.insert(
+            AuditLog(
+                action=AuditAction.PASSWORD_CHANGED,
+                actor_id=user_id,
+                target_id=user_id,
+                ip_address=sanitize_ip(client_ip),
+                user_agent=user_agent,
+            ),
+        )
+
+        await self.email_service.send_password_changed_email(user.email)
+
+        return user
+
+    async def request_password_reset(
+        self, email: str, client_ip: str, user_agent: str
+    ) -> bool:
+        """Request a password reset. Uniform 200 regardless of outcome.
+
+        Gate 6: dual rate limit, count-on-send (only enqueued emails
+        count). Gate 7: identical external response for all account
+        states. Matrix D3: ACTIVE sends a reset, PENDING resends
+        verification, SUSPENDED/BANNED send nothing.
+        """
+        await self.dual_rate_limiter.check_allowed(email, client_ip)
+
+        hold_window = timedelta(hours=settings.EMAIL_CHANGE_HOLD_HOURS)
+        user = await self.user_repo.get_by_email_or_previous(
+            email, hold_window
+        )
+
+        if user is None:
+            # Dummy work for timing equalisation (gate 7).
+            generate_verification_token()
+            return True
+
+        if user.status == UserStatus.PENDING:
+            # Resend verification instead of a reset (matrix D3).
+            await self.verification_repo.delete_by_user_id(user.id)
+            raw_token, token_hash = generate_verification_token()
+            verification = EmailVerification(
+                id=uuid7(),
+                user_id=user.id,
+                token_hash=token_hash,
+                expires_at=get_token_expiry(),
+            )
+            await self.verification_repo.create(verification)
+            await self.email_service.send_verification_email(
+                user.email, raw_token
+            )
+            await self.dual_rate_limiter.consume_on_send(email, client_ip)
+            return True
+
+        if user.status != UserStatus.ACTIVE:
+            # SUSPENDED/BANNED: send nothing (matrix D3), uniform response.
+            return True
+
+        # ACTIVE: rotate outstanding reset tokens, then create a new one.
+        await self.password_reset_token_repo.delete_by_user_id(user.id)
+        raw_token, token_hash = generate_verification_token()
+        reset_token = PasswordResetToken(
+            id=uuid7(),
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=get_token_expiry(
+                timedelta(hours=settings.RESET_TOKEN_TTL_HOURS)
+            ),
+        )
+        await self.password_reset_token_repo.create(reset_token)
+
+        # Gate 3: during the hold, route the reset link to previous_email.
+        reset_email = user.previous_email or user.email
+        await self.email_service.send_password_reset_email(
+            reset_email, raw_token
+        )
+        await self.dual_rate_limiter.consume_on_send(email, client_ip)
+        return True
+
+    async def reset_password(
+        self, token: str, new_password: str, client_ip: str, user_agent: str
+    ) -> User:
+        """Reset a password using a single-use reset token.
+
+        Gate 2: the token is single-use and outstanding tokens are
+        invalidated. Raises ``InvalidResetTokenError`` on a bad,
+        expired, or used token, or for SUSPENDED/BANNED accounts.
+        """
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        reset_token = await self.password_reset_token_repo.get_by_token_hash(
+            token_hash
+        )
+
+        if reset_token is None or reset_token.used_at is not None:
+            raise InvalidResetTokenError('Invalid or expired reset token')
+        now = datetime.now(timezone.utc)
+        if reset_token.expires_at is None or reset_token.expires_at < now:
+            raise InvalidResetTokenError('Invalid or expired reset token')
+
+        user = await self.user_repo.get_by_id(reset_token.user_id)
+        if user is None or user.status != UserStatus.ACTIVE:
+            raise InvalidResetTokenError('Invalid or expired reset token')
+
+        result = validate_password(new_password)
+        if not result.is_valid:
+            raise ValueError('; '.join(result.errors))
+
+        new_hash = hash_password(new_password)
+        await self.user_repo.update_password(user.id, new_hash)
+
+        await self.password_reset_token_repo.delete_by_user_id(user.id)
+        await self.password_reset_token_repo.mark_as_used(reset_token.id)
+
+        await self.audit_repo.insert(
+            AuditLog(
+                action=AuditAction.PASSWORD_RESET,
+                actor_id=user.id,
+                target_id=user.id,
+                ip_address=sanitize_ip(client_ip),
+                user_agent=user_agent,
+            ),
+        )
+
+        await self.email_service.send_password_reset_done_email(user.email)
+
+        return user
+
+    async def request_email_change(
+        self,
+        user_id: UUID,
+        new_email: str,
+        current_password: str,
+        client_ip: str,
+        user_agent: str,
+    ) -> bool:
+        """Request an email change.
+
+        Gate 1: current-password lockout. Gate 3: uniqueness excludes a
+        held previous_email. Gate 4: confirm link to the new address and
+        a revert link to the old address. Gate 6: dual rate limit,
+        count-on-send.
+        """
+        user = await self.user_repo.get_by_id(user_id)
+        if user is None:
+            raise AuthenticationError('Not authenticated')
+
+        await self.dual_rate_limiter.check_allowed(user.email, client_ip)
+
+        await self.login_rate_limiter.check_login_allowed(
+            user.email, client_ip
+        )
+
+        if not verify_password(current_password, user.password_hash):
+            await self.login_rate_limiter.record_failure(user.email, client_ip)
+            raise InvalidCurrentPasswordError('Current password is incorrect')
+
+        await self.login_rate_limiter.record_success(user.email)
+
+        hold_window = timedelta(hours=settings.EMAIL_CHANGE_HOLD_HOURS)
+        existing = await self.user_repo.get_by_email_or_previous(
+            new_email, hold_window
+        )
+        if existing is not None:
+            raise UserAlreadyExistsError('Email already in use')
+
+        # Rotate on re-request.
+        await self.email_change_repo.delete_by_user_id(user.id)
+
+        confirm_raw, confirm_hash = generate_verification_token()
+        revert_raw, revert_hash = generate_verification_token()
+        request = EmailChangeRequest(
+            id=uuid7(),
+            user_id=user.id,
+            old_email=user.email,
+            new_email=new_email,
+            token_hash=confirm_hash,
+            expires_at=get_token_expiry(timedelta(hours=24)),
+            revert_token_hash=revert_hash,
+            ip=sanitize_ip(client_ip),
+            user_agent=user_agent,
+        )
+        await self.email_change_repo.create(request)
+
+        await self.audit_repo.insert(
+            AuditLog(
+                action=AuditAction.EMAIL_CHANGE_REQUESTED,
+                actor_id=user.id,
+                target_id=user.id,
+                ip_address=sanitize_ip(client_ip),
+                user_agent=user_agent,
+            ),
+        )
+
+        await self.email_service.send_email_change_confirm_email(
+            new_email, confirm_raw
+        )
+        await self.email_service.send_email_change_old_notification(
+            user.email, revert_raw
+        )
+        await self.dual_rate_limiter.consume_on_send(user.email, client_ip)
+        return True
+
+    async def confirm_email_change(
+        self, token: str, client_ip: str, user_agent: str
+    ) -> User:
+        """Confirm an email change with a single-use token.
+
+        Gate 2: outstanding reset tokens are invalidated. Gate 3: the
+        hold fields are set (previous_email + email_changed_at).
+        """
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        request = await self.email_change_repo.get_by_token_hash(token_hash)
+
+        if request is None or request.used_at is not None:
+            raise InvalidResetTokenError('Invalid or expired token')
+        now = datetime.now(timezone.utc)
+        if request.expires_at is None or request.expires_at < now:
+            raise InvalidResetTokenError('Invalid or expired token')
+
+        user = await self.user_repo.get_by_id(request.user_id)
+        if user is None or user.status != UserStatus.ACTIVE:
+            raise InvalidResetTokenError('Invalid or expired token')
+
+        # Uniqueness recheck: the new email may have been taken.
+        hold_window = timedelta(hours=settings.EMAIL_CHANGE_HOLD_HOURS)
+        existing = await self.user_repo.get_by_email_or_previous(
+            request.new_email, hold_window
+        )
+        if existing is not None and existing.id != user.id:
+            raise UserAlreadyExistsError('Email already in use')
+
+        await self.user_repo.update_email(user.id, request.new_email)
+        await self.user_repo.set_email_hold(user.id, request.old_email)
+
+        await self.password_reset_token_repo.delete_by_user_id(user.id)
+        await self.email_change_repo.mark_as_used(request.id)
+
+        await self.audit_repo.insert(
+            AuditLog(
+                action=AuditAction.EMAIL_CHANGED,
+                actor_id=user.id,
+                target_id=user.id,
+                ip_address=sanitize_ip(client_ip),
+                user_agent=user_agent,
+            ),
+        )
+
+        await self.email_service.send_email_changed_notice(request.new_email)
+
+        return user
+
+    async def revert_email_change(
+        self, revert_token: str, client_ip: str, user_agent: str
+    ) -> User:
+        """Revert an email change with a single-use revert token.
+
+        Gate 2: outstanding reset tokens are invalidated. Gate 4: the
+        revert is only valid within the hold window.
+        """
+        token_hash = hashlib.sha256(revert_token.encode()).hexdigest()
+        request = await self.email_change_repo.get_by_revert_token_hash(
+            token_hash
+        )
+
+        if request is None or request.revert_used_at is not None:
+            raise InvalidResetTokenError('Invalid or expired token')
+
+        user = await self.user_repo.get_by_id(request.user_id)
+        if user is None or user.status != UserStatus.ACTIVE:
+            raise InvalidResetTokenError('Invalid or expired token')
+
+        # Hold-window validity: revert only within the hold window.
+        hold_window = timedelta(hours=settings.EMAIL_CHANGE_HOLD_HOURS)
+        now = datetime.now(timezone.utc)
+        hold_expired = (
+            user.email_changed_at is None
+            or user.email_changed_at + hold_window < now
+        )
+        if hold_expired:
+            raise InvalidResetTokenError('Invalid or expired token')
+
+        await self.user_repo.revert_email(user.id)
+
+        await self.password_reset_token_repo.delete_by_user_id(user.id)
+        await self.email_change_repo.mark_revert_as_used(request.id)
+
+        await self.audit_repo.insert(
+            AuditLog(
+                action=AuditAction.EMAIL_CHANGE_REVERTED,
+                actor_id=user.id,
+                target_id=user.id,
+                ip_address=sanitize_ip(client_ip),
+                user_agent=user_agent,
+            ),
+        )
+
+        await self.email_service.send_email_change_reverted_notice(
+            request.old_email
+        )
+
+        return user
 
 
 class SessionService:
@@ -496,12 +856,27 @@ class SessionService:
         """Deactivate the current session."""
         await self.session_repo.deactivate(session_id)
 
-    async def logout_all(self, user_id: UUID) -> int:
+    async def logout_all(
+        self, user_id: UUID, except_session_id: UUID | None = None
+    ) -> int:
         """Revoke all active sessions for the given user.
+
+        Args:
+            user_id: Target user.
+            except_session_id: Optional session id to keep active.
 
         Returns the number of revoked sessions.
         """
-        return await self.session_repo.revoke_all_for_user(user_id)
+        return await self.session_repo.revoke_all_for_user(
+            user_id, except_session_id
+        )
+
+    async def rotate_csrf(self, session_id: UUID) -> str:
+        """Rotate a session's CSRF token and return the raw token."""
+        csrf_raw = secrets.token_urlsafe(32)
+        csrf_hash = hashlib.sha256(csrf_raw.encode()).hexdigest()
+        await self.session_repo.update_csrf_hash(session_id, csrf_hash)
+        return csrf_raw
 
     async def start_impersonation(  # noqa: PLR0913, PLR0917
         self,
