@@ -83,3 +83,28 @@ class TestDualRateLimiter:
         )
         with pytest.raises(RateLimiterUnavailableError):
             await broken.check_allowed(ACCOUNT_KEY, IP_KEY)
+
+    async def test_independent_key_prefixes_do_not_share_windows(
+        self, redis_client: Redis
+    ) -> None:
+        forgot = DualRateLimiter(
+            redis=redis_client,
+            per_account_max=1,
+            per_ip_max=1,
+            window_seconds=3600,
+            key_prefix='forgot',
+        )
+        email_change = DualRateLimiter(
+            redis=redis_client,
+            per_account_max=1,
+            per_ip_max=1,
+            window_seconds=3600,
+            key_prefix='email_change',
+        )
+        await forgot.consume_on_send(ACCOUNT_KEY, IP_KEY)
+        with pytest.raises(RateLimitExceededError):
+            await forgot.check_allowed(ACCOUNT_KEY, IP_KEY)
+        await email_change.check_allowed(ACCOUNT_KEY, IP_KEY)
+        await email_change.consume_on_send(ACCOUNT_KEY, IP_KEY)
+        with pytest.raises(RateLimitExceededError):
+            await email_change.check_allowed(ACCOUNT_KEY, IP_KEY)

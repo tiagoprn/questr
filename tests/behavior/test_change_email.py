@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from questr.infrastructure.dual_rate_limiter import (
     DualRateLimiter,
     get_dual_rate_limiter,
+    get_dual_rate_limiter_email_change,
 )
 from questr.infrastructure.email import BaseEmailService, get_email_service
 
@@ -41,7 +42,7 @@ def _unique_ip() -> str:
 
 @pytest_asyncio.fixture
 async def real_dual_limiter(redis_url: str) -> DualRateLimiter:
-    """Real Redis-backed DualRateLimiter for behavior tests."""
+    """Real Redis-backed DualRateLimiter for the forgot-password path."""
     redis = Redis.from_url(redis_url)
     yield DualRateLimiter(
         redis=redis,
@@ -54,10 +55,34 @@ async def real_dual_limiter(redis_url: str) -> DualRateLimiter:
 
 
 @pytest_asyncio.fixture
+async def real_email_change_limiter(redis_url: str) -> DualRateLimiter:
+    """Real Redis-backed DualRateLimiter for the change-email path.
+
+    Namespaced under its own key prefix so it is independent of the
+    forgot-password limiter (gate 6), matching production wiring.
+    """
+    redis = Redis.from_url(redis_url)
+    yield DualRateLimiter(
+        redis=redis,
+        per_account_max=10,
+        per_ip_max=5,
+        window_seconds=3600,
+        key_prefix='email_change',
+    )
+    await redis.flushall()
+    await redis.aclose()
+
+
+@pytest_asyncio.fixture
 async def app_with_dual_limiter(
-    app: object, real_dual_limiter: DualRateLimiter
+    app: object,
+    real_dual_limiter: DualRateLimiter,
+    real_email_change_limiter: DualRateLimiter,
 ) -> object:
     app.dependency_overrides[get_dual_rate_limiter] = lambda: real_dual_limiter
+    app.dependency_overrides[get_dual_rate_limiter_email_change] = lambda: (
+        real_email_change_limiter
+    )
     return app
 
 
@@ -174,9 +199,8 @@ class TestChangeEmailFlow:
         assert 'revert_token' in captured
 
         # Confirm via POST (pre-auth, token only).
-        confirm = await client.post(
-            CONFIRM_PATH,
-            json={'token': captured['confirm_token']},
+        confirm = await client.get(
+            f'{CONFIRM_PATH}/{captured["confirm_token"]}'
         )
         assert confirm.status_code == 200
         assert confirm.json()['message'] == 'Email changed successfully'
@@ -190,10 +214,7 @@ class TestChangeEmailFlow:
         assert relogin.status_code == 200
 
         # Revert within the hold window restores the old email.
-        revert = await client.post(
-            REVERT_PATH,
-            json={'token': captured['revert_token']},
-        )
+        revert = await client.get(f'{REVERT_PATH}/{captured["revert_token"]}')
         assert revert.status_code == 200
         assert revert.json()['message'] == 'Email change reverted'
 
@@ -236,9 +257,7 @@ class TestChangeEmailFlow:
             headers={'X-CSRF-Token': _csrf(client)},
         )
         assert 'confirm_token' in captured
-        await client.post(
-            CONFIRM_PATH, json={'token': captured['confirm_token']}
-        )
+        await client.get(f'{CONFIRM_PATH}/{captured["confirm_token"]}')
 
         # Request a reset for the OLD email; the reset must route to the
         # previous (old) email, which is what we requested.
@@ -267,20 +286,18 @@ class TestChangeEmailFlow:
             )
             assert resp.status_code == 200
             assert 'revert_token' in captured
-            confirm = await client.post(
-                CONFIRM_PATH, json={'token': captured['confirm_token']}
+            confirm = await client.get(
+                f'{CONFIRM_PATH}/{captured["confirm_token"]}'
             )
             assert confirm.status_code == 200
 
             # 49 hours later the hold (48h) has expired.
             frozen.move_to(datetime(2026, 3, 3, 13, 0, tzinfo=timezone.utc))
-            late = await client.post(
-                REVERT_PATH, json={'token': captured['revert_token']}
+            late = await client.get(
+                f'{REVERT_PATH}/{captured["revert_token"]}'
             )
         assert late.status_code == 400
         assert late.json()['recovery'] == ['forgot_password']
         # The revert token is not reusable either: single-use lifecycle.
-        again = await client.post(
-            REVERT_PATH, json={'token': captured['revert_token']}
-        )
+        again = await client.get(f'{REVERT_PATH}/{captured["revert_token"]}')
         assert again.status_code == 400

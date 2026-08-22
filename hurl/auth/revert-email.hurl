@@ -1,4 +1,4 @@
-# POST /api/v1/auth/me/email/revert - revert an email change (pre-auth, two-step POST)
+# GET /api/v1/auth/me/email/revert/{token} - revert an email change (mirrors verify-email)
 # 1. Signup a fresh account (unique per run)
 POST {{host}}/api/v1/auth/signup
 accept: application/json
@@ -74,11 +74,7 @@ HTTP 200
 [Captures]
 confirm_token: regex "email/confirm/([A-Za-z0-9_-]+)"
 
-POST {{host}}/api/v1/auth/me/email/confirm
-Content-Type: application/json
-{
-    "token": "{{confirm_token}}"
-}
+GET {{host}}/api/v1/auth/me/email/confirm/{{confirm_token}}
 
 HTTP 200
 
@@ -98,12 +94,8 @@ HTTP 200
 [Captures]
 revert_token: regex "email/revert/([A-Za-z0-9_-]+)"
 
-# 5. Revert via POST (two-step: token consumed only by POST)
-POST {{host}}/api/v1/auth/me/email/revert
-Content-Type: application/json
-{
-    "token": "{{revert_token}}"
-}
+# 5. Revert via GET (mirrors verify-email: token consumed on GET)
+GET {{host}}/api/v1/auth/me/email/revert/{{revert_token}}
 
 HTTP 200
 [Asserts]

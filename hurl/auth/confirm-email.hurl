@@ -1,4 +1,4 @@
-# POST /api/v1/auth/me/email/confirm - confirm an email change (pre-auth, two-step POST)
+# GET /api/v1/auth/me/email/confirm/{token} - confirm an email change (mirrors verify-email)
 # 1. Signup a fresh account (unique per run)
 POST {{host}}/api/v1/auth/signup
 accept: application/json
@@ -75,12 +75,8 @@ HTTP 200
 [Captures]
 confirm_token: regex "email/confirm/([A-Za-z0-9_-]+)"
 
-# 5. Confirm via POST (two-step: token consumed only by POST)
-POST {{host}}/api/v1/auth/me/email/confirm
-Content-Type: application/json
-{
-    "token": "{{confirm_token}}"
-}
+# 5. Confirm via GET (mirrors verify-email: token consumed on GET)
+GET {{host}}/api/v1/auth/me/email/confirm/{{confirm_token}}
 
 HTTP 200
 [Asserts]

@@ -26,6 +26,7 @@ from questr.domains.users.service import (
 from questr.infrastructure.dual_rate_limiter import (
     DualRateLimiter,
     get_dual_rate_limiter,
+    get_dual_rate_limiter_email_change,
 )
 from questr.infrastructure.email import (
     BaseEmailService,
@@ -128,16 +129,8 @@ class ChangeEmailResponse(BaseModel):
     message: str
 
 
-class ConfirmEmailChangeRequest(BaseModel):
-    token: str
-
-
 class ConfirmEmailChangeResponse(BaseModel):
     message: str
-
-
-class RevertEmailChangeRequest(BaseModel):
-    token: str
 
 
 class RevertEmailChangeResponse(BaseModel):
@@ -250,6 +243,9 @@ async def get_account_service(  # noqa: PLR0913,PLR0917
     dual_rate_limiter: Annotated[
         DualRateLimiter, Depends(get_dual_rate_limiter)
     ],
+    email_change_rate_limiter: Annotated[
+        DualRateLimiter, Depends(get_dual_rate_limiter_email_change)
+    ],
     email_change_repo: Annotated[
         EmailChangeRepository, Depends(get_email_change_repository)
     ],
@@ -263,6 +259,7 @@ async def get_account_service(  # noqa: PLR0913,PLR0917
         password_reset_token_repo=password_reset_token_repo,
         audit_repo=audit_repo,
         dual_rate_limiter=dual_rate_limiter,
+        email_change_rate_limiter=email_change_rate_limiter,
         email_change_repo=email_change_repo,
     )
 
@@ -737,40 +734,26 @@ async def change_email_route(
 
 @router.get(
     '/me/email/confirm/{token}',
-    include_in_schema=False,
-)
-async def confirm_email_change_form(
-    token: str,
-) -> Response:
-    """Serve a minimal HTML form with the token pre-filled (decision 6)."""
-    return _token_form(
-        action='/api/v1/auth/me/email/confirm',
-        token=token,
-        button='Confirm email change',
-    )
-
-
-@router.post(
-    '/me/email/confirm',
     response_model=ConfirmEmailChangeResponse,
     responses={
-        400: {'description': 'Invalid/expired token'},
+        400: {'description': 'Invalid or expired token'},
     },
 )
 async def confirm_email_change_route(
-    payload: ConfirmEmailChangeRequest,
+    token: str,
     service: T_AccountService,
     session_service: T_SessionService,
     request: Request,
     client_ip: T_ClientIP,
 ) -> ConfirmEmailChangeResponse:
-    """Confirm an email change (pre-auth, EXEMPT).
+    """Confirm an email change via a single-use token (mirrors verify-email).
 
-    Gate 5: all of the user's sessions are revoked.
+    Interim one-step GET-consume; see SECURITY.md. Gate 5: all of the
+    user's sessions are revoked.
     """
     user_agent = request.headers.get('user-agent', '')
     user = await service.confirm_email_change(
-        token=payload.token,
+        token=token,
         client_ip=client_ip,
         user_agent=user_agent,
     )
@@ -780,58 +763,31 @@ async def confirm_email_change_route(
 
 @router.get(
     '/me/email/revert/{token}',
-    include_in_schema=False,
-)
-async def revert_email_change_form(
-    token: str,
-) -> Response:
-    """Serve a minimal HTML form with the token pre-filled (decision 6)."""
-    return _token_form(
-        action='/api/v1/auth/me/email/revert',
-        token=token,
-        button='Revert email change',
-    )
-
-
-@router.post(
-    '/me/email/revert',
     response_model=RevertEmailChangeResponse,
     responses={
-        400: {'description': 'Invalid/expired token'},
+        400: {'description': 'Invalid or expired token'},
     },
 )
 async def revert_email_change_route(
-    payload: RevertEmailChangeRequest,
+    token: str,
     service: T_AccountService,
     session_service: T_SessionService,
     request: Request,
     client_ip: T_ClientIP,
 ) -> RevertEmailChangeResponse:
-    """Revert an email change (pre-auth, EXEMPT).
+    """Revert an email change via a single-use token (mirrors verify-email).
 
-    Gate 5: all of the user's sessions are revoked.
+    Interim one-step GET-consume; see SECURITY.md. Gate 5: all of the
+    user's sessions are revoked.
     """
     user_agent = request.headers.get('user-agent', '')
     user = await service.revert_email_change(
-        revert_token=payload.token,
+        revert_token=token,
         client_ip=client_ip,
         user_agent=user_agent,
     )
     await session_service.logout_all(user.id)
     return RevertEmailChangeResponse(message='Email change reverted')
-
-
-def _token_form(action: str, token: str, button: str) -> Response:
-    """Return a minimal HTML form that POSTs the token."""
-    html = (
-        '<html><body>'
-        f'<form method="post" action="{action}">'
-        f'<input type="hidden" name="token" value="{token}" />'
-        f'<button type="submit">{button}</button>'
-        '</form>'
-        '</body></html>'
-    )
-    return Response(content=html, media_type='text/html')
 
 
 @router.post(

@@ -154,7 +154,7 @@ class AccountService:
 
     deps: user_repo, verification_repo, email_service, rate_limiter,
     login_rate_limiter, reset_token_repo, audit_repo, dual_rate_limiter,
-    email_change_repo.
+    email_change_rate_limiter, email_change_repo.
     """
 
     def __init__(  # noqa: PLR0913,PLR0917
@@ -167,6 +167,7 @@ class AccountService:
         password_reset_token_repo: PasswordResetTokenRepository,
         audit_repo: AuditLogRepository,
         dual_rate_limiter: DualRateLimiter,
+        email_change_rate_limiter: DualRateLimiter,
         email_change_repo: EmailChangeRepository,
     ) -> None:
         self.user_repo = user_repo
@@ -177,6 +178,7 @@ class AccountService:
         self.password_reset_token_repo = password_reset_token_repo
         self.audit_repo = audit_repo
         self.dual_rate_limiter = dual_rate_limiter
+        self.email_change_rate_limiter = email_change_rate_limiter
         self.email_change_repo = email_change_repo
 
     async def signup(  # noqa: PLR0913,PLR0917
@@ -477,7 +479,9 @@ class AccountService:
         if user is None:
             raise AuthenticationError('Not authenticated')
 
-        await self.dual_rate_limiter.check_allowed(user.email, client_ip)
+        await self.email_change_rate_limiter.check_allowed(
+            user.email, client_ip
+        )
 
         await self.login_rate_limiter.check_login_allowed(
             user.email, client_ip
@@ -530,7 +534,9 @@ class AccountService:
         await self.email_service.send_email_change_old_notification(
             user.email, revert_raw
         )
-        await self.dual_rate_limiter.consume_on_send(user.email, client_ip)
+        await self.email_change_rate_limiter.consume_on_send(
+            user.email, client_ip
+        )
         return True
 
     async def confirm_email_change(

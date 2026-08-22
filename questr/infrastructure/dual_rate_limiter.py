@@ -36,6 +36,25 @@ async def get_dual_rate_limiter() -> 'DualRateLimiter':
     )
 
 
+async def get_dual_rate_limiter_email_change() -> 'DualRateLimiter':
+    """Factory for the change-email DualRateLimiter.
+
+    Wired from the ``RATE_LIMIT_EMAIL_CHANGE_*`` settings and namespaced
+    under its own Redis keys so it is independent of the forgot-password
+    limiter (gate 6): a change-email burst cannot deplete the
+    forgot-password budget and vice versa.
+    """
+    redis = get_redis()
+    per_account_max = settings.RATE_LIMIT_EMAIL_CHANGE_MAX
+    return DualRateLimiter(
+        redis=redis,
+        per_account_max=per_account_max,
+        per_ip_max=max(1, per_account_max // 2),
+        window_seconds=settings.RATE_LIMIT_EMAIL_CHANGE_WINDOW_HOURS * 3600,
+        key_prefix='email_change',
+    )
+
+
 class DualRateLimiter:
     """Redis-backed per-account + per-IP limiter with count-on-send.
 
@@ -53,17 +72,19 @@ class DualRateLimiter:
         per_account_max: int,
         per_ip_max: int,
         window_seconds: int,
+        key_prefix: str = 'dual',
     ) -> None:
         self.redis = redis
         self.per_account_max = per_account_max
         self.per_ip_max = per_ip_max
         self.window_seconds = window_seconds
+        self.key_prefix = key_prefix
 
     def _account_key(self, account_key: str) -> str:
-        return f'dual:account:{account_key}'
+        return f'{self.key_prefix}:account:{account_key}'
 
     def _ip_key(self, ip_key: str) -> str:
-        return f'dual:ip:{ip_key}'
+        return f'{self.key_prefix}:ip:{ip_key}'
 
     async def _safe_call(
         self, method: object, *args: object, **kwargs: object

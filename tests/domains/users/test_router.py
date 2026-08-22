@@ -615,7 +615,7 @@ class TestResetPasswordRouter:
 
 
 class TestChangeEmailRouter:
-    """Tests for POST /api/v1/auth/me/email (+ confirm/revert)."""
+    """Tests for POST /me/email and GET /me/email/{confirm,revert}/{token}."""
 
     @pytest.mark.asyncio
     async def test_change_email_requires_auth(
@@ -672,10 +672,10 @@ class TestChangeEmailRouter:
         acct.request_email_change.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_confirm_exempt_and_revokes_sessions(
+    async def test_confirm_get_consumes_token_and_revokes_sessions(
         self, app: FastAPI, client: AsyncClient
     ) -> None:
-        """Gate 5: confirm is exempt and revokes all sessions."""
+        """Gate 5: confirm (GET-consume) revokes all sessions."""
         user_id = uuid7()
         acct = MagicMock(spec=AccountService)
         acct.confirm_email_change = AsyncMock(
@@ -686,19 +686,16 @@ class TestChangeEmailRouter:
         app.dependency_overrides[get_account_service] = lambda: acct
         app.dependency_overrides[get_session_service] = lambda: svc
 
-        resp = await client.post(
-            '/api/v1/auth/me/email/confirm',
-            json={'token': 'rawtoken'},
-        )
+        resp = await client.get('/api/v1/auth/me/email/confirm/rawtoken')
         assert resp.status_code == 200
         assert resp.json()['message'] == 'Email changed successfully'
         svc.logout_all.assert_awaited_once_with(user_id)
 
     @pytest.mark.asyncio
-    async def test_revert_exempt_and_revokes_sessions(
+    async def test_revert_get_consumes_token_and_revokes_sessions(
         self, app: FastAPI, client: AsyncClient
     ) -> None:
-        """Gate 5: revert is exempt and revokes all sessions."""
+        """Gate 5: revert (GET-consume) revokes all sessions."""
         user_id = uuid7()
         acct = MagicMock(spec=AccountService)
         acct.revert_email_change = AsyncMock(
@@ -709,10 +706,7 @@ class TestChangeEmailRouter:
         app.dependency_overrides[get_account_service] = lambda: acct
         app.dependency_overrides[get_session_service] = lambda: svc
 
-        resp = await client.post(
-            '/api/v1/auth/me/email/revert',
-            json={'token': 'rawrevert'},
-        )
+        resp = await client.get('/api/v1/auth/me/email/revert/rawrevert')
         assert resp.status_code == 200
         assert resp.json()['message'] == 'Email change reverted'
         svc.logout_all.assert_awaited_once_with(user_id)
@@ -728,10 +722,7 @@ class TestChangeEmailRouter:
         )
         app.dependency_overrides[get_account_service] = lambda: acct
 
-        resp = await client.post(
-            '/api/v1/auth/me/email/confirm',
-            json={'token': 'rawtoken'},
-        )
+        resp = await client.get('/api/v1/auth/me/email/confirm/rawtoken')
         assert resp.status_code == 400
         assert resp.json()['recovery'] == ['forgot_password']
 

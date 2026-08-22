@@ -167,6 +167,7 @@ def account_service(
         password_reset_token_repo=mock_password_reset_token_repo,
         audit_repo=mock_audit_log_repo,
         dual_rate_limiter=mock_dual_rate_limiter,
+        email_change_rate_limiter=mock_dual_rate_limiter,
         email_change_repo=mock_email_change_repo,
     )
 

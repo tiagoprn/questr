@@ -41,7 +41,7 @@ message_id: jsonpath "$.messages[0].ID"
 GET {{mailpit}}/api/v1/message/{{message_id}}
 HTTP 200
 [Captures]
-reset_token: regex "reset-password/([A-Za-z0-9_-]+)"
+reset_token: regex "reset-password#token=([A-Za-z0-9_-]+)"
 
 # 5. Reset the password with the single-use token
 POST {{host}}/api/v1/auth/reset-password

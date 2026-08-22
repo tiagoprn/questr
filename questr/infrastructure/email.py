@@ -151,7 +151,7 @@ class SmtpEmailService(BaseEmailService):
     async def send_password_reset_email(
         self, to_email: str, token: str
     ) -> bool:
-        reset_url = f'{settings.app_url}/api/v1/auth/reset-password/{token}'
+        reset_url = f'{settings.app_url}/reset-password#token={token}'
         message = EmailMessage()
         message['From'] = self.from_email
         message['To'] = to_email
