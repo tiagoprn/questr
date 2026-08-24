@@ -60,6 +60,8 @@ make dev-server
 
 ```
 
+After this, open a new terminal, because the `dev-server` command will hold it.
+
 #### 02) Seed the db with users, activate 2 of them and promote "supe" to superuser
 
 ```bash
