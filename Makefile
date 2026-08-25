@@ -199,10 +199,10 @@ dev-hurl-change-email:  ## signup + login + change-email flow using hurl (requir
 	@hurl --very-verbose --variables-file hurl/vars/auth/change-email/change-email.vars hurl/auth/change-email.hurl
 
 dev-hurl-confirm-email:  ## change + confirm email flow using hurl (requires dev-server + Mailpit)
-	@hurl --very-verbose --variables-file hurl/vars/auth/confirm-email/confirm-email.vars hurl/auth/confirm-email.hurl
+	@hurl --very-verbose --variables-file hurl/vars/auth/confirm-email/confirm-email.vars --variable new_email=hurl-$$(uuidgen)-new@questr.dev hurl/auth/confirm-email.hurl
 
 dev-hurl-revert-email:  ## change + confirm + revert email flow using hurl (requires dev-server + Mailpit)
-	@hurl --very-verbose --variables-file hurl/vars/auth/revert-email/revert-email.vars hurl/auth/revert-email.hurl
+	@hurl --very-verbose --variables-file hurl/vars/auth/revert-email/revert-email.vars --variable new_email=hurl-$$(uuidgen)-new@questr.dev hurl/auth/revert-email.hurl
 
 dev-hurl-admin-impersonate:  ## superuser impersonate flow using hurl (requires dev-server + seeded superuser)
 	@hurl --very-verbose --variables-file hurl/vars/auth/impersonate/impersonate.vars hurl/auth/admin-impersonate.hurl
