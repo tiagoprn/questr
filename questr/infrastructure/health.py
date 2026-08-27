@@ -13,6 +13,7 @@ name-bound import would freeze the dev-database engine into this module.
 
 import asyncio
 import importlib.metadata
+import logging
 import time
 from collections.abc import Awaitable
 
@@ -23,6 +24,8 @@ from sqlalchemy import text
 from questr.infrastructure import redis as redis_infra
 from questr.infrastructure.orm import base
 from questr.settings import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=['health'])
 
@@ -42,7 +45,8 @@ async def check_database() -> dict[str, bool | str | float]:
     try:
         async with base.engine.connect() as conn:
             await conn.execute(text('SELECT 1'))
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('database health check failed: %s', exc)
         return {
             'healthy': False,
             'error': _DATABASE_ERROR,
@@ -57,10 +61,12 @@ async def check_database() -> dict[str, bool | str | float]:
 async def check_redis() -> dict[str, bool | str | float]:
     """Return a health check dict for Redis connectivity."""
     start = time.monotonic()
-    redis = redis_infra.get_redis()
+    redis = None
     try:
+        redis = redis_infra.get_redis()
         await redis.ping()
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('redis health check failed: %s', exc)
         return {
             'healthy': False,
             'error': _REDIS_ERROR,
@@ -69,7 +75,8 @@ async def check_redis() -> dict[str, bool | str | float]:
     finally:
         # A from_pool client's aclose() releases the client without closing
         # the shared pool.
-        await redis.aclose()
+        if redis is not None:
+            await redis.aclose()
     return {
         'healthy': True,
         'latency_ms': _elapsed_ms(start),
@@ -84,6 +91,7 @@ async def _run_checked(
     try:
         result = await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
+        logger.warning('%s health check timed out', name)
         return {
             'healthy': False,
             'error': f'{name} check timed out',

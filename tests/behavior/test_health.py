@@ -16,7 +16,9 @@ from collections.abc import AsyncGenerator
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import create_async_engine
 
+import questr.infrastructure.orm.base as orm_base
 from questr.factory import create_app
 from questr.infrastructure.health import APP_VERSION
 
@@ -76,3 +78,24 @@ async def test_readiness_returns_200_when_ready(
     assert body['checks']['database']['healthy'] is True
     assert body['checks']['redis']['healthy'] is True
     assert body['version'] == APP_VERSION
+
+
+async def test_readiness_returns_503_when_database_down(
+    health_client: AsyncClient,
+) -> None:
+    """A dead database flips readiness to 503 with a generic error."""
+    original = orm_base.engine
+    # Port 1 is not listening; connection is refused immediately.
+    bad = create_async_engine('postgresql+psycopg://u:p@127.0.0.1:1/db')
+    orm_base.engine = bad
+    try:
+        response = await health_client.get('/health/ready')
+    finally:
+        orm_base.engine = original
+        await bad.dispose()
+    assert response.status_code == 503  # noqa: PLR2004
+    body = response.json()
+    assert body['status'] == 'not_ready'
+    assert body['checks']['database']['healthy'] is False
+    assert body['checks']['database']['error'] == 'database unreachable'
+    assert body['checks']['redis']['healthy'] is True
