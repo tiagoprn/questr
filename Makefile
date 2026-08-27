@@ -209,3 +209,6 @@ dev-hurl-admin-impersonate-stop:  ## impersonate + stop flow using hurl (require
 
 dev-hurl-admin-roles:  ## role change flow using hurl (requires dev-server + seeded superuser + Mailpit)
 	@hurl --very-verbose --variables-file hurl/vars/auth/roles/roles.vars hurl/auth/admin-roles.hurl
+
+dev-hurl-health:  ## liveness + readiness + startup probes using hurl (requires the dev-server up)
+	@hurl --very-verbose --variables-file hurl/vars/health/health.vars hurl/health/health.hurl

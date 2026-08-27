@@ -201,6 +201,7 @@ order. The admin targets need the seeded SUPERUSER account
 | `dev-hurl-admin-impersonate` | `hurl/auth/admin-impersonate.hurl` | `POST /api/v1/auth/admin/impersonate` (superuser -> impersonate target -> `/me` confirms) | dev-server + SUPERUSER |
 | `dev-hurl-admin-impersonate-stop` | `hurl/auth/admin-impersonate-stop.hurl` | `POST /api/v1/auth/admin/impersonate/stop` (full round-trip, admin restored) | dev-server + SUPERUSER |
 | `dev-hurl-admin-roles` | `hurl/auth/admin-roles.hurl` | `POST /api/v1/auth/admin/roles` (promote throwaway, self-change 403, restore) | dev-server + SUPERUSER + Mailpit |
+| `dev-hurl-health` | `hurl/health/health.hurl` | `GET /health`, `GET /health/ready`, `GET /health/started` (Kubernetes probes, served at the app root without the `/api` prefix) | dev-server |
 
 ### Notes
 
