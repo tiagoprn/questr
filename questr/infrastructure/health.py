@@ -74,9 +74,13 @@ async def check_redis() -> dict[str, bool | str | float]:
         }
     finally:
         # A from_pool client's aclose() releases the client without closing
-        # the shared pool.
+        # the shared pool. Guard the close so a failure here can never convert
+        # an unhealthy 503 into a 500 (the never-500 contract).
         if redis is not None:
-            await redis.aclose()
+            try:
+                await redis.aclose()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('redis health check aclose failed: %s', exc)
     return {
         'healthy': True,
         'latency_ms': _elapsed_ms(start),
