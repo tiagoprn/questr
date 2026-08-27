@@ -33,9 +33,8 @@ Before writing a single line of logic, identify the major business domains. Each
 | Domain | Responsibility |
 |---|---|
 | `users` | Authentication, user management, email verification, session lifecycle (login, sessions, logout) |
-| `hello` | Sample domain / health check |
 
-**Rule:** No cross-domain imports between domain modules. A file inside `questr/domains/users/` must not import from `questr/domains/hello/` or any other domain. This is enforced by lint rule **QTR002** (see [Lint Rules](#15-lint-rules)).
+**Rule:** No cross-domain imports between domain modules. A file inside `questr/domains/users/` must not import from `questr/domains/reports/` or any other domain. This is enforced by lint rule **QTR002** (see [Lint Rules](#15-lint-rules)).
 
 **Exception:** `api.py` files (the HTTP adapter layer) may import from `orchestrators/` — see [Cross-Domain Communication](#4-cross-domain-communication).
 
@@ -52,11 +51,12 @@ domains/users/
     repository.py # Domain dataclasses + persistence (ORM queries, _to_domain mapping)
 ```
 
-Domains without persistence (e.g., the stateless `hello` sample) need only
-`api.py` and `service.py` -- `repository.py` is omitted because there is no
-ORM model and no `_to_domain()` mapping to host. The three-file structure is a
-ceiling, not a floor: a domain starts with the files it needs and grows toward
-three, never past it without justification.
+Domains without persistence need only `api.py` and `service.py` --
+`repository.py` is omitted because there is no ORM model and no
+`_to_domain()` mapping to host. No current domain is without
+persistence, but the three-file structure is a ceiling, not a floor: a
+domain starts with the files it needs and grows toward three, never past
+it without justification.
 
 ### Responsibilities
 
@@ -119,9 +119,6 @@ questr/
       api.py         # HTTP routes + Pydantic schemas + Depends wiring
       service.py     # AccountService (signup, verify, resend) + SessionService (login, validate, logout)
       repository.py  # User + EmailVerification + Session dataclasses + repos
-    hello/
-      api.py         # Hello endpoint + response schema
-      service.py     # get_greeting() (time-of-day greeting)
   orchestrators/     # Cross-domain coordination (top-level, not inside domains/)
   infrastructure/
     orm/
@@ -149,15 +146,12 @@ tests/
   behavior/
     conftest.py      # Shared fixtures (FastAPI app + HTTP client)
     test_signup.py   # Happy-path signup test through HTTP boundary
-    test_hello.py    # Parametrized hello endpoint test
   domains/
     users/
       test_domain.py       # Pure unit tests for domain functions
       test_service.py      # Mock-based service behavior tests
       test_repository.py   # Real-DB integration tests
       test_router.py       # Full HTTP integration tests
-    hello/
-      test_router.py       # Hello endpoint tests
 ```
 
 ---
@@ -281,15 +275,12 @@ tests/
   behavior/
     conftest.py      # Shared fixtures (FastAPI app, HTTP client, test DB)
     test_signup.py   # "A user can sign up" — happy path + duplicate error
-    test_hello.py    # "Hello endpoint returns correct greeting"
   domains/
     users/           # Per-domain unit + integration tests
       test_domain.py       # Pure unit tests for domain functions
       test_service.py      # Mock-based service behavior tests
       test_repository.py   # Real-DB integration tests
       test_router.py       # Full HTTP integration tests
-    hello/
-      test_router.py
 ```
 
 ### Guidelines
@@ -381,7 +372,7 @@ infrastructure/email.py        # Merges: email_service_interface + smtp + consol
 
 - ✅ Business logic isolated from HTTP and persistence
 - ✅ Encapsulation — callers don't know if the DB is PostgreSQL or SQLite
-- ✅ Explicit domain boundary — `users/` does not import `hello/`
+- ✅ Explicit domain boundary — `users/` does not import `reports/`
 - ✅ Ubiquitous language — `User`, `EmailVerification`, `signup`
 - ✅ Testable — behavior tests pass through the HTTP boundary
 
@@ -810,7 +801,7 @@ A file inside `questr/domains/{X}` must not import from `questr/domains/{Y}` whe
 **Violation:**
 ```python
 # domains/users/service.py
-from questr.domains.hello import service as hello_service  # ⛔ VIOLATION
+from questr.domains.reports import service as reports_service  # ⛔ VIOLATION
 ```
 
 **Allowed — orchestrator exception:**

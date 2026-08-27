@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
+from redis.asyncio import ConnectionPool
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -15,7 +16,37 @@ from sqlalchemy.ext.asyncio import (
 from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
 
+import questr.infrastructure.orm.base as orm_base
+import questr.infrastructure.redis as redis_infra
 from questr.infrastructure.orm.base import Base
+
+
+@pytest_asyncio.fixture(scope='module')
+async def redirect_infrastructure(
+    postgres_url: str, redis_url: str
+) -> AsyncGenerator[None, None]:
+    """Point the health checks at the testcontainers DB and Redis pool.
+
+    The health module reads ``questr.infrastructure.orm.base.engine`` and
+    ``questr.infrastructure.redis._pool`` lazily via module attributes, so
+    rebinding them here redirects the checks to the test containers.
+    Originals are restored on teardown. Not autouse: only health test
+    modules request it.
+    """
+    original_engine = orm_base.engine
+    original_pool = redis_infra._pool
+
+    test_engine = create_async_engine(postgres_url, echo=False)
+    test_pool = ConnectionPool.from_url(redis_url)
+
+    orm_base.engine = test_engine
+    redis_infra._pool = test_pool
+    yield
+
+    orm_base.engine = original_engine
+    await test_engine.dispose()
+    redis_infra._pool = original_pool
+    await test_pool.aclose()
 
 
 @pytest.fixture(scope='session')

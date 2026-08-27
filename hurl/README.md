@@ -195,7 +195,6 @@ order. The admin targets need the seeded SUPERUSER account
 
 | Target | Hurl file | Covers | Prerequisite |
 |---|---|---|---|
-| `dev-hurl-hello` | `hurl/hello/hello.hurl` | `GET /api/hello` (greeting is hour-dependent; asserts the greeting family) | dev-server |
 | `dev-hurl-resend-verification` | `hurl/auth/resend-verification.hurl` | `POST /api/v1/auth/resend-verification` (signup fresh account, no-enumeration message) | dev-server |
 | `dev-hurl-verify-email` | `hurl/auth/verify-email.hurl` | `GET /api/v1/auth/verify-email/{token}` (signup -> Mailpit token -> verify -> login) | dev-server + Mailpit |
 | `dev-hurl-logout-all` | `hurl/auth/logout-all.hurl` | `POST /api/v1/auth/logout-all` (login seed user -> revoke all -> `/me` 401) | dev-server + seeded `tiago+third` |

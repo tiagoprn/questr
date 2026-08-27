@@ -174,9 +174,6 @@ dev-hurl-create-users:  ## create default users through the API using hurl (requ
 dev-hurl-auth-flow:  ## login + /me + logout + /me flow using hurl (requires the dev-server up)
 	@hurl --very-verbose --variables-file hurl/vars/auth/flow/user_001.vars hurl/auth/auth-flow.hurl
 
-dev-hurl-hello:  ## GET /api/hello check using hurl (requires the dev-server up)
-	@hurl --very-verbose --variables-file hurl/vars/hello/hello.vars hurl/hello/hello.hurl
-
 dev-hurl-resend-verification:  ## resend-verification flow using hurl (requires the dev-server up)
 	@hurl --very-verbose --variables-file hurl/vars/auth/resend/resend.vars hurl/auth/resend-verification.hurl
 

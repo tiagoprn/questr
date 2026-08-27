@@ -20,6 +20,8 @@ from questr.common.exceptions import (
     TooManyActiveSessionsError,
     UserAlreadyExistsError,
 )
+from questr.infrastructure.health import APP_VERSION
+from questr.infrastructure.health import router as health_router
 from questr.lifespan import lifespan
 from questr.settings import settings
 
@@ -29,7 +31,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title='questr',
         description='Comics, mangas and game tracking application backend',
-        version='0.1.0',
+        version=APP_VERSION,
         lifespan=lifespan,
         docs_url='/docs' if settings.SERVE_DOCS else None,
         redoc_url='/redoc' if settings.SERVE_DOCS else None,
@@ -104,6 +106,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(api_router)
+    app.include_router(health_router)
     return app
 
 

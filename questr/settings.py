@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = '127.0.0.1'
     REDIS_HOST: str = '127.0.0.1'
 
+    # Kubernetes readiness per-check timeout (seconds)
+    HEALTH_CHECK_TIMEOUT_SECONDS: float = 2.0
+
     @property
     def DATABASE_URL(self) -> str:
         return (

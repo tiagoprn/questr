@@ -143,6 +143,24 @@ disabled at app construction (`docs_url=None`, `redoc_url=None`,
 - Swagger UI: [http://kvm-labs:8000/docs](http://kvm-labs:8000/docs)
 - ReDoc: [http://kvm-labs:8000/redoc](http://kvm-labs:8000/redoc)
 
+### App version
+
+The application version reported by the OpenAPI schema and the
+`/health/ready` endpoint is read from a single source of truth: the
+`version` field in `pyproject.toml`.
+
+At runtime it is resolved once via `importlib.metadata.version('questr')`
+in `questr/infrastructure/health.py` (exported as `APP_VERSION` and used by
+`questr/factory.py` for the FastAPI `version`).
+
+To bump the version:
+
+1. Update `version` in `pyproject.toml`.
+2. Reinstall the package (`uv sync` or `uv pip install -e .`) so the
+   installed metadata reflects the new value.
+
+No other file hardcodes the version.
+
 ## Security
 
 ### API documentation access control
