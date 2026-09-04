@@ -143,6 +143,7 @@ No other file hardcodes the version.
 The backend uses Clean Architecture, but in a pragmatic and non-convoluted way, using KISS principles and being a solid base that can be improved on in the future. You can find more details about that at <./docs/backend/ARCHITECTURE.md>.
 
 Also, ADRs (Architecture Decision Records) can be found at <./docs/backend/ADRs/>.
+> TODO: there are some more that must be moved from `/storage/src/qntuum/llm/okf/questr/adrs`
 
 ## Security
 
