@@ -138,6 +138,12 @@ To bump the version:
 
 No other file hardcodes the version.
 
+### Backend Coding Architecture
+
+The backend uses Clean Architecture, but in a pragmatic and non-convoluted way, using KISS principles and being a solid base that can be improved on in the future. You can find more details about that at <./docs/backend/ARCHITECTURE.md>.
+
+Also, ADRs (Architecture Decision Records) can be found at <./docs/backend/ADRs/>.
+
 ## Security
 
 ### API documentation access control
