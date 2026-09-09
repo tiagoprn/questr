@@ -1,0 +1,47 @@
+# BuildKit per-Dockerfile ignore file (deploy/Dockerfile.dockerignore).
+# Consulted only because the image is built with: docker build -f deploy/Dockerfile .
+# Paths are relative to the build context (repo root).
+
+# Python caches and virtualenvs
+.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/*.pyc
+
+# Tooling and coverage output
+htmlcov/
+graphify-out/
+.coverage
+coverage.xml
+
+# Local data and scratch space
+backups/
+tmp/
+*.log
+
+# Dev-only compose and env
+docker-compose.yml
+.env
+.env.*
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Non-build asset trees
+docs/
+frontends/
+hurl/
+ops/
+scripts/
+tests/
+
+# Registry auth and local TLS validation material never enters the image
+deploy/secrets/
+deploy/Caddyfile.local
+
+# Backups of any file
+**/*.BKP.*

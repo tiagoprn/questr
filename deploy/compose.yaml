@@ -1,0 +1,144 @@
+# Production Compose stack for questr (Phase 1, change 008).
+# Compose Specification v2 (no `version:` key).
+# The image is pulled from the Forgejo registry (built by
+# scripts/deploy/build-and-push.sh); nothing is built on the VM.
+# Secrets are file-backed under deploy/secrets/ (gitignored; see README there).
+
+services:
+  app:
+    image: oa.saga-torino.ts.net:3000/tiago/questr:${QUESTR_VERSION:-0.1.0}
+    env_file:
+      - ./secrets/app.env
+    environment:
+      # Trust proxy headers only from the backend network pool (D5).
+      # Confirm with `docker network inspect` during implementation (T8).
+      FORWARDED_ALLOW_IPS: 172.16.0.0/12
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+      redis:
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      # /health is liveness-only (no db/redis calls), so the restart actor
+      # never restart-loops a healthy app over a dependency failure.
+      # The slim image has no curl, hence python urllib.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    mem_limit: 512m
+    stop_grace_period: 30s
+    restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  db:
+    image: postgres:18.6
+    environment:
+      # Must match the app's POSTGRES_USER / POSTGRES_DB settings.
+      POSTGRES_USER: questr
+      POSTGRES_DB: questr_db
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    secrets:
+      - pg_password
+    volumes:
+      # PG18 declares VOLUME at /var/lib/postgresql; never the legacy
+      # /var/lib/postgresql/data path.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U questr -d questr_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    shm_size: 256mb
+    mem_limit: 1g
+    stop_grace_period: 60s
+    restart: unless-stopped
+    networks:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7.4.11
+    # requirepass comes from the secret; the mounted config holds
+    # persistence, memory, and eviction policy (D1, D2).
+    command:
+      - sh
+      - -c
+      - exec redis-server /usr/local/etc/redis/redis.conf --requirepass "$$(cat /run/secrets/redis_password)"
+    volumes:
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      # Data lives at /data (dir directive in redis.conf) so AOF/RDB state
+      # survives container recreation.
+      - redisdata:/data
+    secrets:
+      - redis_password
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 512m
+    restart: unless-stopped
+    networks:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2.10.2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and config survive container recreation.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - frontend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  frontend:
+  backend:
+    internal: true
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:
+
+secrets:
+  pg_password:
+    file: ./secrets/pg_password
+  redis_password:
+    file: ./secrets/redis_password

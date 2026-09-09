@@ -1,0 +1,9 @@
+# Production Caddyfile for questr (Phase 1, change 008).
+# Prod-ready: Caddy obtains and renews an automatic Let's Encrypt certificate
+# for the site hostname below. Set the real public domain at deploy time
+# (Phase 3 wires the dual-environment names). Local TLS validation uses
+# deploy/Caddyfile.local (tls internal), not this file.
+
+questr.example.com {
+	reverse_proxy app:8000
+}

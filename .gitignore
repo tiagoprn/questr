@@ -28,6 +28,12 @@ htmlcov/
 .env
 .env.local
 
+# Production deploy secrets (change 008): real files never committed;
+# templates and README stay tracked.
+deploy/secrets/*
+!deploy/secrets/README.md
+!deploy/secrets/*.example
+
 # OS
 .DS_Store
 Thumbs.db

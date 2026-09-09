@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = 'questr_db'
     POSTGRES_HOST: str = '127.0.0.1'
     REDIS_HOST: str = '127.0.0.1'
+    REDIS_PASSWORD: str = ''
 
     # Kubernetes readiness per-check timeout (seconds)
     HEALTH_CHECK_TIMEOUT_SECONDS: float = 2.0
@@ -27,7 +28,10 @@ class Settings(BaseSettings):
 
     @property
     def REDIS_URL(self) -> str:
-        return f'redis://{self.REDIS_HOST}:6379/0'
+        # Password-aware so the production Redis (requirepass) is reachable.
+        # Empty password keeps the dev URL unchanged.
+        credentials = f':{self.REDIS_PASSWORD}@' if self.REDIS_PASSWORD else ''
+        return f'redis://{credentials}{self.REDIS_HOST}:6379/0'
 
     EMAIL_ENABLED: bool = False
     SMTP_HOST: str = 'localhost'

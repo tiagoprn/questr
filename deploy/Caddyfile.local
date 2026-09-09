@@ -1,0 +1,9 @@
+# Local TLS validation override (D6, resolved 2026-09-09: option 2).
+# Used ONLY by T8 on the dev machine/kvm-labs: for non-public names like
+# localhost, Caddy's automatic HTTPS uses its built-in internal CA and issues
+# a self-signed certificate (the `tls internal` path, no cert files to manage).
+# The shipped deploy/Caddyfile stays prod-ready (automatic Let's Encrypt).
+
+localhost {
+	reverse_proxy app:8000
+}
