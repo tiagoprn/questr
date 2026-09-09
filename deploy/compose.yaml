@@ -6,7 +6,7 @@
 
 services:
   app:
-    image: oa.saga-torino.ts.net:3000/tiago/questr:${QUESTR_VERSION:-0.1.0}
+    image: oa.saga-torino.ts.net:3000/tiago/questr:${QUESTR_VERSION:-0.2.0}
     env_file:
       - ./secrets/app.env
     environment:

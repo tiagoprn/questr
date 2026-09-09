@@ -663,7 +663,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title='questr',
         description='Comics, mangas and game tracking application backend',
-        version='0.1.0',
+        version='0.2.0',
         lifespan=lifespan,
     )
 
