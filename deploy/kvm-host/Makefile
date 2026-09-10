@@ -73,11 +73,11 @@ baseline: ## Provision the VM baseline (Docker, unattended upgrades) via Ansible
 		| awk '/questr-staging/ {print $$5}' \
 		| cut -d/ -f1); \
 	if [ -n "$$IP" ]; then \
-		cd ansible/vm-baseline && \
+		cd ansible && \
 		ansible-playbook $(ANSIBLE_VERBOSITY) -i "$$IP," -u ubuntu \
 			--private-key /kvm/questr/ssh/questr_staging_ed25519 \
 			--vault-password-file /kvm/questr/vault-password \
-			site.yml $(ANSIBLE_EXTRA_VARS); \
+			vm-baseline.yml $(ANSIBLE_EXTRA_VARS); \
 	else \
 		echo "No IP found. Is the VM running?"; \
 	fi
@@ -87,11 +87,11 @@ baseline-verify: ## Run only the baseline verification tasks
 		| awk '/questr-staging/ {print $$5}' \
 		| cut -d/ -f1); \
 	if [ -n "$$IP" ]; then \
-		cd ansible/vm-baseline && \
+		cd ansible && \
 		ansible-playbook $(ANSIBLE_VERBOSITY) -i "$$IP," -u ubuntu \
 			--private-key /kvm/questr/ssh/questr_staging_ed25519 \
 			--vault-password-file /kvm/questr/vault-password \
-			site.yml --tags verify $(ANSIBLE_EXTRA_VARS); \
+			vm-baseline.yml --tags verify $(ANSIBLE_EXTRA_VARS); \
 	else \
 		echo "No IP found. Is the VM running?"; \
 	fi
@@ -126,10 +126,10 @@ provision: ## Provision the VM with language toolchains via Ansible
 		| awk '/questr-staging/ {print $$5}' \
 		| cut -d/ -f1); \
 	if [ -n "$$IP" ]; then \
-		cd ansible/setup-lang-toolchain && \
+		cd ansible && \
 		ansible-playbook $(ANSIBLE_VERBOSITY) -i "$$IP," -u ubuntu \
 			--private-key /kvm/questr/ssh/questr_staging_ed25519 \
-			site.yml $(ANSIBLE_EXTRA_VARS); \
+			setup-lang-toolchain.yml $(ANSIBLE_EXTRA_VARS); \
 	else \
 		echo "No IP found. Is the VM running?"; \
 	fi
@@ -139,10 +139,10 @@ provision-verify: ## Run only the verification tasks (cargo-update)
 		| awk '/questr-staging/ {print $$5}' \
 		| cut -d/ -f1); \
 	if [ -n "$$IP" ]; then \
-		cd ansible/setup-lang-toolchain && \
+		cd ansible && \
 		ansible-playbook $(ANSIBLE_VERBOSITY) -i "$$IP," -u ubuntu \
 			--private-key /kvm/questr/ssh/questr_staging_ed25519 \
-			site.yml --tags verify $(ANSIBLE_EXTRA_VARS); \
+			setup-lang-toolchain.yml --tags verify $(ANSIBLE_EXTRA_VARS); \
 	else \
 		echo "No IP found. Is the VM running?"; \
 	fi

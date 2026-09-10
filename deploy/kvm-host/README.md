@@ -188,9 +188,8 @@ always safe -- it never destroys data you cannot regenerate from the master.
 The uploaded volume in `disks/` is disposable by design.
 
 > NOTE: creating/recreating the VM provides the packages defined at `cloud-init-userdata.yaml`.
->       The language toolchains (Python via `uv`, Rust via `rustup`, Node.js via `nvm`) are
->       **not** installed by cloud-init. Run `make provision` after the VM is booted to set
->       them up — see [section 8](#8-provisioning-the-vm).
+>       The Rust toolchain (via `rustup`) is **not** installed by cloud-init. Run `make provision`
+>       after the VM is booted to set it up — see [section 8](#8-provisioning-the-vm).
 
 ## 5. Monitoring the boot
 
@@ -223,7 +222,7 @@ make provision
 ```
 
 This automatically discovers the VM's IP from the libvirt DHCP lease and runs
-the playbook located at `ansible/setup-lang-toolchain/`. It installs:
+the playbook `ansible/setup-lang-toolchain.yml`. It installs:
 
 | Toolchain | Manager  | What gets installed |
 |-----------|----------|---------------------|
@@ -243,7 +242,7 @@ make baseline
 ```
 
 This automatically discovers the VM's IP from the `vmnet` DHCP lease and runs
-the playbook located at `ansible/vm-baseline/`. It installs:
+the playbook `ansible/vm-baseline.yml`. It installs:
 
 | Component | Source | Notes |
 |-----------|--------|-------|
@@ -262,7 +261,7 @@ Run only the verification steps:
 make baseline-verify
 ```
 
-See `ansible/vm-baseline/README.md` for details.
+See `ansible/README.md` for details.
 
 ### Verbose output and timing
 
