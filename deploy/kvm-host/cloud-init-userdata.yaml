@@ -2,7 +2,7 @@
 # Ubuntu 26.04 LTS ("resolute"). Ubuntu cloud images have cloud-init pre-installed and
 # pre-configured for the default `ubuntu` user; the SSH key below is merged
 # into /home/ubuntu/.ssh/authorized_keys automatically.
-hostname: questr-vm
+hostname: questr-staging
 timezone: America/Sao_Paulo
 package_update: true
 package_upgrade: true
@@ -10,7 +10,6 @@ packages:
   - curl
   - git
   - openssh-server
-  - rustup
   - fd-find
   - ripgrep
   - fzf

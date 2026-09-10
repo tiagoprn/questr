@@ -1,0 +1,10 @@
+# Default Debian/Ubuntu unattended-upgrades config, trimmed to security-only
+# origins per the questr staging baseline. The ${distro_id}/${distro_codename}
+# placeholders are resolved by the apt configuration itself.
+
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}-security";
+};
+
+# Do not reboot automatically on a staging VM.
+Unattended-Upgrade::Automatic-Reboot "false";

@@ -10,13 +10,13 @@
 #   -h, --help  Show this help.
 #
 # What this script removes (in order):
-#   1. The questr-vm domain (destroy + undefine, if defined)
+#   1. The questr-staging domain (destroy + undefine, if defined)
 #   2. The libvirt volumes in questr_pool:
 #        - questr-init.iso
 #        - questr-disk.qcow2
 #        - ubuntu-base.qcow2 (legacy, only if present from the pre-flatten design)
 #   3. The questr_pool itself (destroy + undefine)
-#   4. The local disk directory /storage/kvm/disks
+#   4. The local disk directory /kvm/questr/disks
 #   5. Local OpenTofu state files in TF_DIR:
 #        - .terraform/
 #        - terraform.tfstate
@@ -26,7 +26,7 @@
 # What this script PRESERVES (operator-managed, not tofu-managed):
 #   - /kvm/questr/ssh/                     (SSH keys)
 #   - /kvm/questr/shared/                  (shared directory for virtiofs)
-#   - /kvm/questr/questr-vm-console.log    (live console log)
+#   - /kvm/questr/questr-staging-console.log    (live console log)
 #
 # After this script completes, run:
 #   tofu init && tofu plan && tofu apply
@@ -37,7 +37,7 @@
 
 set -euo pipefail
 
-VM_NAME="questr-vm"
+VM_NAME="questr-staging"
 POOL_NAME="questr_pool"
 DISK_DIR="/kvm/questr/disks"
 # Self-locating default: the terraform directory is this script's parent,
@@ -213,7 +213,7 @@ echo ""
 info "preserved (operator-managed, not tofu-managed):"
 echo "  - /kvm/questr/ssh/                       (SSH keys)"
 echo "  - /kvm/questr/shared/                    (shared directory)"
-echo "  - /kvm/questr/questr-vm-console.log      (live console log)"
+echo "  - /kvm/questr/questr-staging-console.log      (live console log)"
 echo ""
 
 if [[ $DRY_RUN != true ]]; then

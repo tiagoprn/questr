@@ -11,8 +11,8 @@
 # attribute was removed in v0.9). The uploaded qcow2 defines its own 80 GiB
 # virtual size, so no `capacity` attribute is needed.
 resource "libvirt_volume" "questr_disk" {
-  name   = "questr-disk.qcow2"
-  pool   = libvirt_pool.questr_pool.name
+  name = "questr-disk.qcow2"
+  pool = libvirt_pool.questr_pool.name
 
   target = {
     format = {
@@ -29,12 +29,12 @@ resource "libvirt_volume" "questr_disk" {
   depends_on = [libvirt_pool.questr_pool]
 }
 
-resource "libvirt_domain" "questr_vm" {
-  name = "questr-vm"
-  memory = var.vm_memory_mb
+resource "libvirt_domain" "questr_staging" {
+  name        = "questr-staging"
+  memory      = var.vm_memory_mb
   memory_unit = "MiB"
-  vcpu   = var.vm_vcpu
-  type   = "kvm"
+  vcpu        = var.vm_vcpu
+  type        = "kvm"
 
   # q35 machine type + SeaBIOS + explicit PCIe root ports, with the machine
   # type PINNED to pc-q35-9.2: the versioned type this disk was created
@@ -95,15 +95,15 @@ resource "libvirt_domain" "questr_vm" {
     # Each pcie-root-port creates a dedicated PCIe bus for its assigned device.
     # Modeled after the working "labs" VM at /kvm/labs/conf/labs.xml.
     controllers = [
-      { type = "pci", model = "pcie-root",        index = 0 },
-      { type = "pci", model = "pcie-root-port",  index = 1 },
-      { type = "pci", model = "pcie-root-port",  index = 2 },
-      { type = "pci", model = "pcie-root-port",  index = 3 },
-      { type = "pci", model = "pcie-root-port",  index = 4 },
-      { type = "pci", model = "pcie-root-port",  index = 5 },
-      { type = "pci", model = "pcie-root-port",  index = 6 },
-      { type = "pci", model = "pcie-root-port",  index = 7 },
-      { type = "pci", model = "pcie-root-port",  index = 8 },
+      { type = "pci", model = "pcie-root", index = 0 },
+      { type = "pci", model = "pcie-root-port", index = 1 },
+      { type = "pci", model = "pcie-root-port", index = 2 },
+      { type = "pci", model = "pcie-root-port", index = 3 },
+      { type = "pci", model = "pcie-root-port", index = 4 },
+      { type = "pci", model = "pcie-root-port", index = 5 },
+      { type = "pci", model = "pcie-root-port", index = 6 },
+      { type = "pci", model = "pcie-root-port", index = 7 },
+      { type = "pci", model = "pcie-root-port", index = 8 },
     ]
 
     # Root disk on virtio (vda). With explicit pcie-root-port controllers,
@@ -229,14 +229,13 @@ resource "libvirt_domain" "questr_vm" {
     # path. libvirt does not allocate anything, planned == actual, and the
     # console log persists across VM reboots, strictly more useful for
     # debugging cloud-init and kernel issues. The log is co-located with
-    # other operator-managed questr artifacts (/storage/kvm/questr/{ssh,
-    # shared}/) so it survives the cleanup cycle and can be diffed across
+    # other operator-managed questr artifacts (/kvm/questr/{ssh, shared}/) so it survives the cleanup cycle and can be diffed across
     # runs.
     serials = [
       {
         source = {
           file = {
-            path = "/kvm/questr/questr-vm-console.log"
+            path = "/kvm/questr/questr-staging-console.log"
           }
         }
         target = {

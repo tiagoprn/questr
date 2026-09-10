@@ -13,7 +13,7 @@ variable "shared_guest_tag" {
 variable "vm_memory_mb" {
   description = "Guest RAM in MiB"
   type        = number
-  default     = 4096
+  default     = 2048
 }
 
 variable "vm_vcpu" {
@@ -31,5 +31,5 @@ variable "disk_size_bytes" {
 variable "ssh_public_key_path" {
   description = "Path to the SSH public key injected via cloud-init"
   type        = string
-  default     = "/kvm/questr/ssh/questr_vm_ed25519.pub"
+  default     = "/kvm/questr/ssh/questr_staging_ed25519.pub"
 }

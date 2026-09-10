@@ -1,0 +1,56 @@
+---
+- name: Create /etc/apt/keyrings
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Add Tailscale repository signing key
+  ansible.builtin.get_url:
+    url: https://pkgs.tailscale.com/stable/ubuntu/resolute.noarmor.gpg
+    dest: /etc/apt/keyrings/tailscale.asc
+    mode: "0644"
+  become: true
+
+- name: Add Tailscale apt repository (deb822)
+  ansible.builtin.deb822_repository:
+    name: tailscale
+    types: deb
+    uris: https://pkgs.tailscale.com/stable/ubuntu
+    suites: resolute
+    components: main
+    architectures: amd64
+    signed_by: /etc/apt/keyrings/tailscale.asc
+    state: present
+  become: true
+
+- name: Install Tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+    update_cache: true
+  become: true
+
+- name: Enable and start tailscaled
+  ansible.builtin.systemd_service:
+    name: tailscaled
+    state: started
+    enabled: true
+  become: true
+
+- name: Join the tailnet with the vaulted auth key
+  ansible.builtin.command: >-
+    tailscale up
+    --authkey {{ tailscale_auth_key }}
+    --hostname {{ tailscale_hostname }}
+  register: tailscale_up
+  changed_when: tailscale_up.stdout | length > 0
+  no_log: true   # the auth key must never appear in logs
+  become: true
+
+- name: Verify Tailscale connectivity
+  ansible.builtin.command: tailscale status
+  changed_when: false
+  become: true
+  tags: verify

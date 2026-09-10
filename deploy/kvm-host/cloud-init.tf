@@ -7,8 +7,8 @@ resource "libvirt_cloudinit_disk" "questr_init" {
 
   # meta_data is REQUIRED in the v0.9+ provider
   meta_data = <<-EOF
-    instance-id: questr-vm-001
-    local-hostname: questr-vm
+    instance-id: questr-staging-001
+    local-hostname: questr-staging
   EOF
 
   # Use a match pattern instead of a hard-coded interface name.

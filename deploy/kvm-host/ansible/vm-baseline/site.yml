@@ -1,0 +1,12 @@
+---
+- name: VM baseline for the questr staging VM
+  hosts: all
+  gather_facts: true
+
+  vars_files:
+    - vault/tailscale.yml
+
+  roles:
+    - docker
+    - unattended-upgrades
+    - tailscale

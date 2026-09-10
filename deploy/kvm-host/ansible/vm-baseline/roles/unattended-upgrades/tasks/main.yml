@@ -1,0 +1,38 @@
+---
+# Security-only unattended upgrades, matching the staging baseline:
+# automatic update of the package lists and unattended installation of
+# security updates, no reboots.
+
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - update-notifier-common
+    state: present
+    update_cache: true
+  become: true
+
+- name: Enable automatic update checks and upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    mode: "0644"
+  become: true
+
+- name: Security-only allowed origins
+  ansible.builtin.copy:
+    src: 50unattended-upgrades
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    mode: "0644"
+  become: true
+  notify: Restart unattended-upgrades
+
+- name: Verify unattended-upgrades is enabled
+  ansible.builtin.command: systemctl is-enabled unattended-upgrades
+  register: unattended_enabled_check
+  changed_when: false
+  failed_when: unattended_enabled_check.stdout != "enabled"
+  become: true
+  tags: verify

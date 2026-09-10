@@ -1,0 +1,2 @@
+[questr_staging]
+questr-staging ansible_host=192.168.122.100 ansible_user=ubuntu

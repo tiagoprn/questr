@@ -14,12 +14,12 @@ on an EndeavourOS host, behind KVM + libvirt + virtiofs.
 | Machine     | pc-q35-9.2 (pinned, QEMU 11.0.2)                 |
 | Firmware    | SeaBIOS                                          |
 | CPU         | host-model                                       |
-| RAM         | 4 GiB                                            |
+| RAM         | 2 GiB                                            |
 | vCPUs       | 2                                                |
 | Root disk   | virtio (`vda`), 80 GiB self-contained qcow2      |
 |             | (flat master in `/kvm/templates/disks/`, |
 |             |  uploaded by OpenTofu on apply)                  |
-| Network     | virtio, NAT via libvirt `default` network         |
+| Network     | virtio, NAT via libvirt `vmnet` network           |
 | Shared dir  | virtiofs at `/kvm/questr/shared`                       |
 | PCIe        | 8 explicit `pcie-root-port` controllers          |
 | Console     | Serial, written to file                          |
@@ -42,15 +42,15 @@ sudo pacman -S --needed \
 | `libvirt` | VM lifecycle manager |
 | `qemu-desktop` | QEMU + KVM hypervisor |
 | `edk2-ovmf` | UEFI firmware (OVMF) — available as fallback |
-| `dnsmasq` | DHCP/DNS for libvirt's default NAT network |
-| `iptables-nft` | NAT rules for the default network |
+| `dnsmasq` | DHCP/DNS for libvirt's `vmnet` NAT network |
+| `iptables-nft` | NAT rules for the `vmnet` network |
 | `virtiofsd` | Userspace daemon for virtiofs shared folders |
 
 > **Note on `bridge-utils`:** This package was removed from the Arch repositories.
 > The `iproute2` package (part of the `base` group, pre-installed) provides the
 > equivalent functionality. No manual bridge configuration is needed — the
 > OpenTofu config in `main.tf` attaches the guest to libvirt's built-in
-> `default` virtual network, which manages its own `virbr0` bridge via `dnsmasq`.
+> `vmnet` virtual network, which manages its own `virbr0` bridge via `dnsmasq`.
 
 ### 2.2 Enable and start libvirtd
 
@@ -103,14 +103,14 @@ sudo chown -R $USER:$USER /kvm
 
 ```bash
 ssh-keygen -t ed25519 \
-  -f /kvm/questr/ssh/questr_vm_ed25519 \
-  -C "questr-vm@enterprise-d" \
+  -f /kvm/questr/ssh/questr_staging_ed25519 \
+  -C "questr-staging@enterprise-d" \
   -N ""
 ```
 
 This produces:
-- `/kvm/questr/ssh/questr_vm_ed25519` — **private key** (keep on host)
-- `/kvm/questr/ssh/questr_vm_ed25519.pub` — **public key** (injected into guest)
+- `/kvm/questr/ssh/questr_staging_ed25519` — **private key** (keep on host)
+- `/kvm/questr/ssh/questr_staging_ed25519.pub` — **public key** (injected into guest)
 
 > Never copy the private key into the VM. The public key is sufficient.
 
@@ -134,10 +134,10 @@ Log out and back in for the group change to take effect.
 │   └── questr-disk.qcow2          ← runtime disk (OpenTofu-managed, re-uploaded
 │                                    from the templates master on every `make recreate`)
 ├── shared/                        ← virtiofs shared folder (↔ /host/shared in guest)
-├── questr-vm-console.log          ← persistent serial console log
+├── questr-staging-console.log          ← persistent serial console log
 └── ssh/
-    ├── questr_vm_ed25519          ← SSH private key (host only)
-    └── questr_vm_ed25519.pub      ← SSH public key (injected into guest)
+    ├── questr_staging_ed25519          ← SSH private key (host only)
+    └── questr_staging_ed25519.pub      ← SSH public key (injected into guest)
 ```
 
 ## 3. Creating the VM (first time)
@@ -178,10 +178,10 @@ slate. On the subsequent `tofu apply`, OpenTofu re-uploads the runtime disk
 
 | What gets destroyed | What survives |
 |---|---|
-| Domain (questr-vm) | `/kvm/questr/templates/` -- golden master (NEVER touched by the destroy script) |
+| Domain (questr-staging) | `/kvm/questr/templates/` -- golden master (NEVER touched by the destroy script) |
 | All volumes in `questr_pool` | `/kvm/questr/ssh/` -- SSH keys |
 | The pool itself | `/kvm/questr/shared/` -- virtiofs shared directory |
-| `/kvm/questr/disks/` (directory + all files) | `/kvm/questr/questr-vm-console.log` -- serial log |
+| `/kvm/questr/disks/` (directory + all files) | `/kvm/questr/questr-staging-console.log` -- serial log |
 
 The golden master lives **outside** the pool directory, so `make recreate` is
 always safe -- it never destroys data you cannot regenerate from the master.
@@ -202,7 +202,7 @@ make console     # interactive: virsh console (Ctrl+] to detach)
 ```
 
 The serial console is written to a persistent log file at
-`/kvm/questr/questr-vm-console.log`. It survives VM reboots and the
+`/kvm/questr/questr-staging-console.log`. It survives VM reboots and the
 destroy script, so you can `diff` it across runs to compare boot behaviour.
 
 ## 6. Accessing the VM
@@ -228,10 +228,41 @@ the playbook located at `ansible/setup-lang-toolchain/`. It installs:
 | Toolchain | Manager  | What gets installed |
 |-----------|----------|---------------------|
 | Rust      | `rustup` (snap) | Latest stable toolchain (rustc, cargo) |
-> TODO: it must also install docker
 
 The playbook is **idempotent** — you can run `make provision` again to update
 toolchains or recover from a partial installation.
+
+## 9. VM baseline
+
+After (or before) provisioning the toolchains, run the baseline playbook to
+install Docker and enable unattended security updates:
+
+```bash
+cd /kvm/questr/git/questr/deploy/kvm-host
+make baseline
+```
+
+This automatically discovers the VM's IP from the `vmnet` DHCP lease and runs
+the playbook located at `ansible/vm-baseline/`. It installs:
+
+| Component | Source | Notes |
+|-----------|--------|-------|
+| Docker Engine | official apt repo (`resolute`) | Engine, CLI, containerd, buildx, Compose plugin |
+| `daemon.json` | role file | Log caps `10m x 3`, matching the deployed compose stack |
+| unattended-upgrades | Ubuntu repo | Security-only origins, no automatic reboots |
+| Tailscale | official apt repo (`resolute`) | Joins the tailnet via `tailscale up` with a vaulted auth key |
+
+The engine packages (`docker-ce`, `docker-ce-cli`, `containerd.io`) are held
+with `apt-mark hold` so security updates never upgrade them underneath
+running containers.
+
+Run only the verification steps:
+
+```bash
+make baseline-verify
+```
+
+See `ansible/vm-baseline/README.md` for details.
 
 ### Verbose output and timing
 
@@ -251,7 +282,7 @@ make provision-verify
 
 This installs `cargo-update` (Rust) to confirm the rust toolchain is working.
 
-## 9. Other useful commands
+## 10. Other useful commands
 
 Run `make help` to see all available targets:
 
@@ -260,6 +291,8 @@ $ make help
 autostart-off  Disable autostart for the VM
 autostart-on   Enable autostart for the VM (start on host boot)
 autostart-status Show autostart status (enabled/disabled)
+baseline       Provision the VM baseline (Docker, unattended upgrades) via Ansible
+baseline-verify Run only the baseline verification tasks
 console        Attach to the serial console (interactive, Ctrl+] to detach)
 create         Create the VM for the first time
 help           Show this help

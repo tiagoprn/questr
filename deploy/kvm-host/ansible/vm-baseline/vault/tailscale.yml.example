@@ -1,0 +1,10 @@
+---
+# Placeholder values encrypted with a DUMMY vault password for agent-side
+# syntax checks only. Before a real run, replace these with the real values
+# and rekey the file:
+#   ansible-vault rekey vault/tailscale.yml \
+#     --vault-password-file /kvm/questr/vault-password \
+#     --new-vault-password-file /kvm/questr/vault-password
+# (first populate the real auth key first via `ansible-vault edit`).
+tailscale_auth_key: "PLACEHOLDER-AUTH-KEY"
+tailscale_hostname: "questr-staging"
