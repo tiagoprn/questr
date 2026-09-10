@@ -1,0 +1,46 @@
+---
+- name: Check if rustup is installed
+  ansible.builtin.command: snap list rustup
+  register: rust_snap_rustup
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  become: true
+
+- name: Install rustup via snap
+  ansible.builtin.command: snap install rustup --classic
+  when: rust_snap_rustup.rc != 0
+  changed_when: true
+  become: true
+
+- name: Set default toolchain to stable
+  ansible.builtin.command: rustup default stable
+  register: rust_rustup_default
+  changed_when: '"installing" in rust_rustup_default.stdout'
+
+- name: Update stable toolchain
+  ansible.builtin.command: rustup update stable
+  register: rust_rustup_update
+  changed_when: '"updated" in rust_rustup_update.stdout'
+
+- name: Print rustc version
+  ansible.builtin.command: rustc --version
+  register: rust_rustc_version
+  changed_when: false
+
+- name: Add cargo bin directory to PATH
+  ansible.builtin.lineinfile:
+    path: "{{ ansible_facts['user_dir'] }}/.bashrc"
+    line: export PATH="$HOME/.cargo/bin:$PATH"
+
+- name: Install cargo-update
+  ansible.builtin.command: cargo install cargo-update
+  args:
+    creates: "{{ ansible_facts['user_dir'] }}/.cargo/bin/cargo-install-update"
+  tags: [verify]
+
+- name: Verify cargo-install-update version
+  ansible.builtin.command: "{{ ansible_facts['user_dir'] }}/.cargo/bin/cargo-install-update --version"
+  register: rust_cargo_update_version
+  changed_when: false
+  tags: [verify]

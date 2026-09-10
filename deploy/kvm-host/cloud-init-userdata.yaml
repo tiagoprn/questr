@@ -1,0 +1,42 @@
+#cloud-config
+# Ubuntu 26.04 LTS ("resolute"). Ubuntu cloud images have cloud-init pre-installed and
+# pre-configured for the default `ubuntu` user; the SSH key below is merged
+# into /home/ubuntu/.ssh/authorized_keys automatically.
+hostname: questr-vm
+timezone: America/Sao_Paulo
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - git
+  - openssh-server
+  - rustup
+  - fd-find
+  - ripgrep
+  - fzf
+  - build-essential
+  - starship
+  - btop
+  - tmux
+  - neovim
+  - duf
+runcmd:
+  # Ensure the virtio network driver is loaded. CONFIG_VIRTIO_NET=y is the
+  # default for Ubuntu cloud images but modprobe is a no-op safety belt in case
+  # a future image changes the kernel config. The Captain confirmed the
+  # resolute cloud image documentation calls out this requirement explicitly.
+  - modprobe virtio_net || true
+
+  # virtiofs shared folder — mount at boot
+  - mkdir -p /host/shared
+  - echo "host_shared /host/shared virtiofs defaults 0 0" >> /etc/fstab
+  - mount /host/shared || true
+
+  # Enable SSH daemon — service name is `ssh` on Ubuntu (was `sshd` on Arch)
+  - systemctl enable --now ssh
+
+  # Enable periodic TRIM to keep the qcow2 file compact on the host
+  - systemctl enable --now fstrim.timer
+
+ssh_authorized_keys:
+  - ${ssh_public_key}

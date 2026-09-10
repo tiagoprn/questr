@@ -1,0 +1,19 @@
+---
+- name: Setup language toolchains
+  hosts: all
+  gather_facts: true
+
+  pre_tasks:
+    - name: Install system prerequisites
+      ansible.builtin.apt:
+        name:
+          - curl
+          - build-essential
+          - libssl-dev
+          - pkg-config
+        state: present
+        update_cache: true
+      become: true
+
+  roles:
+    - rust
