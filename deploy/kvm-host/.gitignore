@@ -1,0 +1,5 @@
+# OpenTofu / Terraform local artifacts
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
